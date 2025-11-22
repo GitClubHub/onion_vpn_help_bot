@@ -9,8 +9,8 @@ logging.basicConfig(
     level=logging.INFO
 )
 
-# ВРЕМЕННО: Прямое указание токена
-BOT_TOKEN = "8222449218:AAFgj48oh7Qczvre3l17Tr4FLWmzlWZKVtM"
+# Токен бота из переменных окружения
+BOT_TOKEN = os.environ['BOT_TOKEN']
 
 # Цены за подписку
 PRICES = {
