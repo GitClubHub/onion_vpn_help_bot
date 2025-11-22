@@ -10,7 +10,7 @@ logging.basicConfig(
 )
 
 # Токен бота из переменных окружения
-BOT_TOKEN = os.environ 'BOT_TOKEN'
+BOT_TOKEN = os.environ "BOT_TOKEN"
 
 # Цены за подписку
 PRICES = {
