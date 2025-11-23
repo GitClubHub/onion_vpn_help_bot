@@ -14,6 +14,7 @@ BOT_TOKEN = "8222449218:AAFgj48oh7Qczvre3l17Tr4FLWmzlWZKVtM"
 
 # Токен ЮKassa (ваш тестовый ключ)
 YOOKASSA_PROVIDER_TOKEN = "test_WID1Xwp2NqxOeQ82EEEvsDhLI_dEcEGKeLrxr3qTKLk"
+YOOKASSA_SHOP_ID = "1212021"
 
 # Цены за подписку в копейках (ЮKassa работает в копейках)
 PRICES = {
