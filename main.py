@@ -1,7 +1,7 @@
 import os
 import logging
-from telegram import Update, ReplyKeyboardMarkup, KeyboardButton
-from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
+from telegram import Update, ReplyKeyboardMarkup, KeyboardButton, LabeledPrice
+from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes, PreCheckoutQueryHandler
 
 # Настройка логирования
 logging.basicConfig(
@@ -9,16 +9,22 @@ logging.basicConfig(
     level=logging.INFO
 )
 
-# Токен бота из переменных окружения
+# Токен бота
 BOT_TOKEN = "8222449218:AAFgj48oh7Qczvre3l17Tr4FLWmzlWZKVtM"
 
-# Цены за подписку
+# Токен ЮKassa (ваш тестовый ключ)
+YOOKASSA_PROVIDER_TOKEN = "test_WID1Xwp2NqxOeQ82EEEvsDhLI_dEcEGKeLrxr3qTKLk"
+
+# Цены за подписку в копейках (ЮKassa работает в копейках)
 PRICES = {
-    "1_month": 150,
-    "3_months": 350,
-    "6_months": 600,
-    "12_months": 1000
+    "1_month": 15000,  # 150 рублей = 15000 копеек
+    "3_months": 35000,
+    "6_months": 60000,
+    "12_months": 100000
 }
+
+# Словарь для хранения выбранных тарифов пользователей
+user_tariffs = {}
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Обработчик команды /start"""
@@ -46,9 +52,8 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 💳 <b>Как получить доступ:</b>
 1. Выберите тариф подписки
-2. Оплатите стоимость
-3. Отправьте скриншот оплаты
-4. Получите данные для доступа
+2. Оплатите картой через безопасный платеж
+3. Получите данные для доступа автоматически
 
 👇 <b>Выберите тариф для продолжения:</b>
     """
@@ -66,42 +71,112 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def handle_tariff_selection(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Обработчик выбора тарифа"""
     text = update.message.text
+    user_id = update.message.from_user.id
     
     if "1 месяц" in text:
-        await send_payment_info(update, "1 месяц", PRICES["1_month"])
+        user_tariffs[user_id] = "1_month"
+        await create_invoice(update, "1_month", "VPN подписка на 1 месяц", "Доступ к VPN на 1 месяц", PRICES["1_month"])
     elif "3 месяца" in text:
-        await send_payment_info(update, "3 месяца", PRICES["3_months"])
+        user_tariffs[user_id] = "3_months"
+        await create_invoice(update, "3_months", "VPN подписка на 3 месяца", "Доступ к VPN на 3 месяца", PRICES["3_months"])
     elif "6 месяцев" in text:
-        await send_payment_info(update, "6 месяцев", PRICES["6_months"])
+        user_tariffs[user_id] = "6_months"
+        await create_invoice(update, "6_months", "VPN подписка на 6 месяцев", "Доступ к VPN на 6 месяцев", PRICES["6_months"])
     elif "12 месяцев" in text:
-        await send_payment_info(update, "12 месяцев", PRICES["12_months"])
+        user_tariffs[user_id] = "12_months"
+        await create_invoice(update, "12_months", "VPN подписка на 12 месяцев", "Доступ к VPN на 12 месяцев", PRICES["12_months"])
 
-async def send_payment_info(update: Update, period: str, price: int):
-    """Отправляет информацию об оплате"""
-    payment_text = f"""
-💳 <b>Оплата подписки {period}</b>
+async def create_invoice(update: Update, tariff_id: str, title: str, description: str, price: int):
+    """Создание инвойса для оплаты через ЮKassa"""
+    
+    # Преобразуем цену из копеек в рубли для отображения
+    price_rub = price // 100
+    
+    # Параметры для инвойса
+    payload = f"vpn_subscription_{tariff_id}"
+    currency = "RUB"
+    prices = [LabeledPrice(label=title, amount=price)]
+    
+    await update.message.reply_invoice(
+        title=title,
+        description=description,
+        payload=payload,
+        provider_token=YOOKASSA_PROVIDER_TOKEN,
+        currency=currency,
+        prices=prices,
+        need_name=False,
+        need_email=True,  # Запрашиваем email для чека
+        need_phone_number=False,
+        need_shipping_address=False,
+        is_flexible=False
+    )
 
-💰 <b>Сумма к оплате:</b> {price}₽
+async def pre_checkout_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Обработчик предварительной проверки оплаты"""
+    query = update.pre_checkout_query
+    
+    # Проверяем данные
+    if query.invoice_payload.startswith('vpn_subscription_'):
+        await query.answer(ok=True)
+    else:
+        await query.answer(ok=False, error_message="Произошла ошибка при обработке платежа")
 
-🏦 <b>Реквизиты для оплаты:</b>
-Сбербанк: <code>1111111111111111</code>
+async def successful_payment_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Обработчик успешной оплаты"""
+    payment = update.message.successful_payment
+    user = update.message.from_user
+    user_id = user.id
+    
+    # Определяем тариф по payload
+    tariff_map = {
+        "vpn_subscription_1_month": ("1 месяц", 150),
+        "vpn_subscription_3_months": ("3 месяца", 350), 
+        "vpn_subscription_6_months": ("6 месяцев", 600),
+        "vpn_subscription_12_months": ("12 месяцев", 1000)
+    }
+    
+    tariff_name, tariff_price = tariff_map.get(payment.invoice_payload, ("неизвестный тариф", 0))
+    
+    # Генерируем данные для VPN
+    vpn_username = f"vpnuser{user.id}"
+    vpn_password = generate_password()
+    
+    success_text = f"""
+🎉 <b>Оплата прошла успешно!</b>
 
-📋 <b>ВАЖНО!</b> После оплаты:
+✅ <b>Тариф:</b> {tariff_name}
+💳 <b>Сумма:</b> {tariff_price} ₽
+📧 <b>Email для чека:</b> {payment.order_info.email if payment.order_info and payment.order_info.email else 'не указан'}
 
-1. Сделайте скриншот чека об оплате
-2. Напишите мне в Telegram: @o0_Ai_Donna_0o
-3. Отправьте скриншот или файл с оплатой
-4. Укажите ваш выбранный тариф ({period})
+🔐 <b>Ваши данные для VPN:</b>
+├ Логин: <code>{vpn_username}</code>
+├ Пароль: <code>{vpn_password}</code>
+└ Срок действия: {tariff_name}
 
-🎁 После проверки оплаты вы получите:
-• Логин и пароль для VPN
-• Инструкцию по настройке
-• Техническую поддержку
+📥 <b>Скачайте конфигурацию:</b>
+Для получения конфигурационного файла обратитесь в поддержку: /support
 
-⏰ Обычно это занимает не более 15 минут!
+📖 <b>Инструкция по настройке:</b>
+/instructions
+
+🛠 <b>Техподдержка:</b>
+/support
+
+💡 <b>Сохраните эти данные в надежном месте!</b>
     """
     
-    await update.message.reply_text(payment_text, parse_mode='HTML')
+    await update.message.reply_text(success_text, parse_mode='HTML')
+    
+    # Очищаем данные о выбранном тарифе
+    if user_id in user_tariffs:
+        del user_tariffs[user_id]
+
+def generate_password(length=12):
+    """Генерация случайного пароля"""
+    import string
+    import random
+    characters = string.ascii_letters + string.digits
+    return ''.join(random.choice(characters) for i in range(length))
 
 async def support(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Обработчик команды /support"""
@@ -132,7 +207,7 @@ async def instructions(update: Update, context: ContextTypes.DEFAULT_TYPE):
 🖥 <b>Для Windows:</b>
 1. Скачайте OpenVPN с официального сайта
 2. Установите программу
-3. Загрузите конфиг-файл (получите после оплаты)
+3. Запросите конфиг-файл у поддержки
 4. Запустите подключение
 
 📱 <b>Для Android/iOS:</b>
@@ -157,10 +232,10 @@ async def price(update: Update, context: ContextTypes.DEFAULT_TYPE):
 💰 <b>Стоимость подписки</b>
 
 📅 <b>Тарифы:</b>
-• 1 месяц - {PRICES['1_month']}₽
-• 3 месяца - {PRICES['3_months']}₽
-• 6 месяцев - {PRICES['6_months']}₽
-• 12 месяцев - {PRICES['12_months']}₽
+• 1 месяц - {PRICES['1_month'] // 100}₽
+• 3 месяца - {PRICES['3_months'] // 100}₽
+• 6 месяцев - {PRICES['6_months'] // 100}₽
+• 12 месяцев - {PRICES['12_months'] // 100}₽
 
 💡 <b>Выберите тариф</b> кнопками ниже или напишите /start
     """
@@ -234,10 +309,15 @@ def main():
         application.add_handler(CommandHandler("info", info))
         application.add_handler(CommandHandler("help", start))
         
+        # Обработчики для платежей
+        application.add_handler(PreCheckoutQueryHandler(pre_checkout_handler))
+        application.add_handler(MessageHandler(filters.SUCCESSFUL_PAYMENT, successful_payment_handler))
+        
         # Обработчик текстовых сообщений (тарифы)
         application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_tariff_selection))
         
-        print("🟢 Бот запущен и работает на Railway!")
+        print("🟢 Бот запущен и работает с ЮKassa!")
+        print("💰 Платежи готовы к тестированию")
         print("⏰ Бот будет работать 24/7")
         
         application.run_polling()
