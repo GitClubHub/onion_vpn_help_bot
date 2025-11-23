@@ -13,7 +13,7 @@ logging.basicConfig(
 
 # Токены
 BOT_TOKEN = "8222449218:AAFgj48oh7Qczvre3l17Tr4FLWmzlWZKVtM"
-YOOKASSA_PROVIDER_TOKEN = "test_WID1Xwp2NqxOeQ82EEEvsDhLI_dEcEGKeLrxr3qTKLk"
+YOOKASSA_PROVIDER_TOKEN = "381764678:TEST:42000"
 
 # Цены в копейках
 PRICES = {
