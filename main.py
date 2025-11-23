@@ -44,17 +44,6 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 • Поддержка 24/7
 • Работа с любыми сайтами
 
-📋 <b>Доступные команды:</b>
-/support - 📞 Техническая поддержка
-/instructions - 📖 Инструкция по настройке
-/price - 💰 Стоимость подписки
-/info - ℹ️ О сервисе
-
-💳 <b>Как получить доступ:</b>
-1. Выберите тариф подписки
-2. Оплатите картой через безопасный платеж
-3. Получите данные для доступа автоматически
-
 👇 <b>Выберите тариф для продолжения:</b>
     """
     
@@ -62,17 +51,20 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     keyboard = [
         [KeyboardButton("1 месяц - 150₽"), KeyboardButton("3 месяца - 350₽")],
         [KeyboardButton("6 месяцев - 600₽"), KeyboardButton("12 месяцев - 1000₽")],
-        [KeyboardButton("/support"), KeyboardButton("/instructions")]
+        [KeyboardButton("📞 Поддержка"), KeyboardButton("📖 Инструкция")]
     ]
     reply_markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
     
     await update.message.reply_text(welcome_text, reply_markup=reply_markup, parse_mode='HTML')
 
-async def handle_tariff_selection(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Обработчик выбора тарифа"""
+async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Обработчик всех текстовых сообщений"""
     text = update.message.text
     user_id = update.message.from_user.id
     
+    print(f"Получено сообщение: {text} от пользователя {user_id}")  # Для отладки
+    
+    # Обработка выбора тарифов
     if "1 месяц" in text:
         user_tariffs[user_id] = "1_month"
         await create_invoice(update, "1_month", "VPN подписка на 1 месяц", "Доступ к VPN на 1 месяц", PRICES["1_month"])
@@ -85,31 +77,52 @@ async def handle_tariff_selection(update: Update, context: ContextTypes.DEFAULT_
     elif "12 месяцев" in text:
         user_tariffs[user_id] = "12_months"
         await create_invoice(update, "12_months", "VPN подписка на 12 месяцев", "Доступ к VPN на 12 месяцев", PRICES["12_months"])
+    
+    # Обработка других кнопок
+    elif "поддерж" in text.lower() or "📞" in text:
+        await support(update, context)
+    elif "инструкц" in text.lower() or "📖" in text:
+        await instructions(update, context)
+    
+    # Обработка простых сообщений
+    elif any(word in text.lower() for word in ['привет', 'hello', 'hi', 'start']):
+        await start(update, context)
+    elif 'тариф' in text.lower() or 'цена' in text.lower():
+        await price(update, context)
+    elif 'инфо' in text.lower() or 'о сервисе' in text.lower():
+        await info(update, context)
+    else:
+        await update.message.reply_text(
+            "🤔 Не понял ваш запрос. Используйте кнопки ниже или напишите /start",
+            reply_markup=ReplyKeyboardMarkup([
+                [KeyboardButton("1 месяц - 150₽"), KeyboardButton("3 месяца - 350₽")],
+                [KeyboardButton("📞 Поддержка"), KeyboardButton("📖 Инструкция")]
+            ], resize_keyboard=True)
+        )
 
 async def create_invoice(update: Update, tariff_id: str, title: str, description: str, price: int):
     """Создание инвойса для оплаты через ЮKassa"""
-    
-    # Преобразуем цену из копеек в рубли для отображения
-    price_rub = price // 100
-    
-    # Параметры для инвойса
-    payload = f"vpn_subscription_{tariff_id}"
-    currency = "RUB"
-    prices = [LabeledPrice(label=title, amount=price)]
-    
-    await update.message.reply_invoice(
-        title=title,
-        description=description,
-        payload=payload,
-        provider_token=YOOKASSA_PROVIDER_TOKEN,
-        currency=currency,
-        prices=prices,
-        need_name=False,
-        need_email=True,  # Запрашиваем email для чека
-        need_phone_number=False,
-        need_shipping_address=False,
-        is_flexible=False
-    )
+    try:
+        # Параметры для инвойса
+        payload = f"vpn_subscription_{tariff_id}"
+        currency = "RUB"
+        prices = [LabeledPrice(label=title, amount=price)]
+        
+        await update.message.reply_invoice(
+            title=title,
+            description=description,
+            payload=payload,
+            provider_token=YOOKASSA_PROVIDER_TOKEN,
+            currency=currency,
+            prices=prices,
+            need_name=False,
+            need_email=True,
+            need_phone_number=False,
+            need_shipping_address=False,
+            is_flexible=False
+        )
+    except Exception as e:
+        await update.message.reply_text(f"❌ Ошибка при создании платежа: {e}")
 
 async def pre_checkout_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Обработчик предварительной проверки оплаты"""
@@ -123,25 +136,26 @@ async def pre_checkout_handler(update: Update, context: ContextTypes.DEFAULT_TYP
 
 async def successful_payment_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Обработчик успешной оплаты"""
-    payment = update.message.successful_payment
-    user = update.message.from_user
-    user_id = user.id
-    
-    # Определяем тариф по payload
-    tariff_map = {
-        "vpn_subscription_1_month": ("1 месяц", 150),
-        "vpn_subscription_3_months": ("3 месяца", 350), 
-        "vpn_subscription_6_months": ("6 месяцев", 600),
-        "vpn_subscription_12_months": ("12 месяцев", 1000)
-    }
-    
-    tariff_name, tariff_price = tariff_map.get(payment.invoice_payload, ("неизвестный тариф", 0))
-    
-    # Генерируем данные для VPN
-    vpn_username = f"vpnuser{user.id}"
-    vpn_password = generate_password()
-    
-    success_text = f"""
+    try:
+        payment = update.message.successful_payment
+        user = update.message.from_user
+        user_id = user.id
+        
+        # Определяем тариф по payload
+        tariff_map = {
+            "vpn_subscription_1_month": ("1 месяц", 150),
+            "vpn_subscription_3_months": ("3 месяца", 350), 
+            "vpn_subscription_6_months": ("6 месяцев", 600),
+            "vpn_subscription_12_months": ("12 месяцев", 1000)
+        }
+        
+        tariff_name, tariff_price = tariff_map.get(payment.invoice_payload, ("неизвестный тариф", 0))
+        
+        # Генерируем данные для VPN
+        vpn_username = f"vpnuser{user.id}"
+        vpn_password = generate_password()
+        
+        success_text = f"""
 🎉 <b>Оплата прошла успешно!</b>
 
 ✅ <b>Тариф:</b> {tariff_name}
@@ -153,23 +167,23 @@ async def successful_payment_handler(update: Update, context: ContextTypes.DEFAU
 ├ Пароль: <code>{vpn_password}</code>
 └ Срок действия: {tariff_name}
 
-📥 <b>Скачайте конфигурацию:</b>
-Для получения конфигурационного файла обратитесь в поддержку: /support
-
 📖 <b>Инструкция по настройке:</b>
-/instructions
+Напишите "Инструкция" или нажмите кнопку ниже
 
 🛠 <b>Техподдержка:</b>
-/support
+Напишите "Поддержка" для связи
 
 💡 <b>Сохраните эти данные в надежном месте!</b>
-    """
-    
-    await update.message.reply_text(success_text, parse_mode='HTML')
-    
-    # Очищаем данные о выбранном тарифе
-    if user_id in user_tariffs:
-        del user_tariffs[user_id]
+        """
+        
+        await update.message.reply_text(success_text, parse_mode='HTML')
+        
+        # Очищаем данные о выбранном тарифе
+        if user_id in user_tariffs:
+            del user_tariffs[user_id]
+            
+    except Exception as e:
+        await update.message.reply_text(f"❌ Ошибка при обработке платежа: {e}")
 
 def generate_password(length=12):
     """Генерация случайного пароля"""
@@ -179,15 +193,13 @@ def generate_password(length=12):
     return ''.join(random.choice(characters) for i in range(length))
 
 async def support(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Обработчик команды /support"""
+    """Обработчик команды поддержки"""
     support_text = """
 📞 <b>Техническая поддержка</b>
 
 🕒 <b>Время работы:</b> 24/7
 
 📱 <b>Telegram:</b> @o0_Ai_Donna_0o
-
-📧 <b>Почта:</b> support@vpnservice.com
 
 🔧 <b>Мы поможем с:</b>
 • Настройкой VPN
@@ -200,7 +212,7 @@ async def support(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(support_text, parse_mode='HTML')
 
 async def instructions(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Обработчик команды /instructions"""
+    """Обработчик команды инструкции"""
     instructions_text = """
 📖 <b>Инструкция по настройке VPN</b>
 
@@ -222,7 +234,7 @@ async def instructions(update: Update, context: ContextTypes.DEFAULT_TYPE):
 3. Загрузите конфигурацию
 4. Перезагрузите роутер
 
-🔧 <b>Нужна помощь?</b> Напишите /support
+🔧 <b>Нужна помощь?</b> Напишите "Поддержка"
     """
     await update.message.reply_text(instructions_text, parse_mode='HTML')
 
@@ -232,18 +244,18 @@ async def price(update: Update, context: ContextTypes.DEFAULT_TYPE):
 💰 <b>Стоимость подписки</b>
 
 📅 <b>Тарифы:</b>
-• 1 месяц - {PRICES['1_month'] // 100}₽
-• 3 месяца - {PRICES['3_months'] // 100}₽
-• 6 месяцев - {PRICES['6_months'] // 100}₽
-• 12 месяцев - {PRICES['12_months'] // 100}₽
+• 1 месяц - 150₽
+• 3 месяца - 350₽
+• 6 месяцев - 600₽
+• 12 месяцев - 1000₽
 
-💡 <b>Выберите тариф</b> кнопками ниже или напишите /start
+💡 <b>Выберите тариф кнопками ниже</b>
     """
     
-    # Клавиатура с тарифами
     keyboard = [
         [KeyboardButton("1 месяц - 150₽"), KeyboardButton("3 месяца - 350₽")],
-        [KeyboardButton("6 месяцев - 600₽"), KeyboardButton("12 месяцев - 1000₽")]
+        [KeyboardButton("6 месяцев - 600₽"), KeyboardButton("12 месяцев - 1000₽")],
+        [KeyboardButton("📞 Поддержка"), KeyboardButton("📖 Инструкция")]
     ]
     reply_markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
     
@@ -269,32 +281,16 @@ async def info(update: Update, context: ContextTypes.DEFAULT_TYPE):
 • Поддержка 4K потокового видео
 • Стабильное соединение
 
-🔒 <b>Гарантии:</b>
-• Работаем с 2020 года
-• Тысячи довольных клиентов
-• Круглосуточная поддержка
-
-💬 <b>Начните использовать:</b> /start
+💬 <b>Начните использовать - выберите тариф ниже!</b>
     """
-    await update.message.reply_text(info_text, parse_mode='HTML')
-
-async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Обработчик текстовых сообщений"""
-    text = update.message.text
     
-    if any(word in text.lower() for word in ['привет', 'hello', 'hi']):
-        await update.message.reply_text("👋 Привет! Используйте /start для начала работы")
-    elif 'тариф' in text.lower():
-        await price(update, context)
-    elif 'поддерж' in text.lower():
-        await support(update, context)
-    elif 'инструкц' in text.lower():
-        await instructions(update, context)
-    else:
-        await update.message.reply_text(
-            "🤔 Не понял ваш запрос.\n"
-            "Используйте /start для выбора тарифа или /help для списка команд"
-        )
+    keyboard = [
+        [KeyboardButton("1 месяц - 150₽"), KeyboardButton("3 месяца - 350₽")],
+        [KeyboardButton("📞 Поддержка"), KeyboardButton("📖 Инструкция")]
+    ]
+    reply_markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
+    
+    await update.message.reply_text(info_text, reply_markup=reply_markup, parse_mode='HTML')
 
 def main():
     """Основная функция запуска бота"""
@@ -313,8 +309,8 @@ def main():
         application.add_handler(PreCheckoutQueryHandler(pre_checkout_handler))
         application.add_handler(MessageHandler(filters.SUCCESSFUL_PAYMENT, successful_payment_handler))
         
-        # Обработчик текстовых сообщений (тарифы)
-        application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_tariff_selection))
+        # Обработчик ВСЕХ текстовых сообщений - ДОЛЖЕН БЫТЬ ПОСЛЕДНИМ
+        application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
         
         print("🟢 Бот запущен и работает с ЮKassa!")
         print("💰 Платежи готовы к тестированию")
