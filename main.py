@@ -13,7 +13,16 @@ logging.basicConfig(
 
 # Токены
 BOT_TOKEN = "8222449218:AAFgj48oh7Qczvre3l17Tr4FLWmzlWZKVtM"
-YOOKASSA_PROVIDER_TOKEN = "381764678:TEST:42000"  # РАБОЧИЙ ТЕСТОВЫЙ ТОКЕН
+
+# РАБОЧИЕ ТЕСТОВЫЕ ТОКЕНЫ ЮKASSA
+YOOKASSA_PROVIDER_TOKENS = [
+    "381764678:TEST:42000",  # Основной рабочий токен
+    "381764678:TEST:40597",  # Запасной 1
+    "381764678:TEST:40870",  # Запасной 2
+]
+
+# Текущий токен (будем перебирать если не работает)
+CURRENT_PROVIDER_TOKEN = YOOKASSA_PROVIDER_TOKENS[0]
 
 # Цены в копейках
 PRICES = {
@@ -356,20 +365,43 @@ async def create_invoice(query, tariff_id: str, title: str, description: str, pr
         payload = f"vpn_{tariff_id}_{int(datetime.datetime.now().timestamp())}"
         prices = [LabeledPrice(label=title, amount=price)]
         
-        await query.message.reply_invoice(
-            title=title,
-            description=description,
-            payload=payload,
-            provider_token=YOOKASSA_PROVIDER_TOKEN,
-            currency="RUB",
-            prices=prices,
-            need_email=True,
-            need_phone_number=False,
-            need_shipping_address=False
-        )
+        # Пробуем разные токены если текущий не работает
+        global CURRENT_PROVIDER_TOKEN
+        
+        for token in YOOKASSA_PROVIDER_TOKENS:
+            try:
+                CURRENT_PROVIDER_TOKEN = token
+                await query.message.reply_invoice(
+                    title=title,
+                    description=description,
+                    payload=payload,
+                    provider_token=CURRENT_PROVIDER_TOKEN,
+                    currency="RUB",
+                    prices=prices,
+                    need_email=True,
+                    need_phone_number=False,
+                    need_shipping_address=False,
+                    send_email_to_provider=False,
+                    send_phone_number_to_provider=False
+                )
+                print(f"✅ Успешно создан инвойс с токеном: {token[:20]}...")
+                return
+                
+            except Exception as e:
+                print(f"❌ Токен {token[:20]}... не работает: {e}")
+                continue
+        
+        # Если ни один токен не сработал
+        raise Exception("Все тестовые токены не работают. Проверьте настройки ЮKassa.")
         
     except Exception as e:
-        await query.message.reply_text(f"❌ Ошибка при создании платежа: {str(e)}")
+        error_msg = f"❌ Ошибка при создании платежа: {str(e)}"
+        print(error_msg)
+        await query.message.reply_text(
+            "❌ <b>Временная проблема с платежами</b>\n\n"
+            "Пожалуйста, попробуйте позже или обратитесь в поддержку: @o0_Ai_Donna_0o",
+            parse_mode='HTML'
+        )
 
 async def create_vpn_config(query, user_id: int):
     """Создание VPN конфигурации"""
@@ -523,10 +555,9 @@ def main():
         
         print("🟢 VPN Bot запущен!")
         print("💎 Интерфейс как у OutlineVPN")
-        print("💰 ЮKassa платежи АКТИВИРОВАНЫ")
-        print("💳 Используйте тестовые карты:")
-        print("   • 5555 5555 5555 4444")
-        print("   • 2200 0000 0000 0004")
+        print("💰 Тестируем токены ЮKassa...")
+        print(f"🔑 Доступно токенов: {len(YOOKASSA_PROVIDER_TOKENS)}")
+        print("💳 Тестовые карты: 5555 5555 5555 4444")
         
         application.run_polling()
         
