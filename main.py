@@ -13,7 +13,7 @@ logging.basicConfig(
 
 # Токены
 BOT_TOKEN = "8222449218:AAFgj48oh7Qczvre3l17Tr4FLWmzlWZKVtM"
-YOOKASSA_PROVIDER_TOKEN = "test_WID1Xwp2NqxOeQ82EEEvsDhLI_dEcEGKeLrxr3qTKLk"
+YOOKASSA_PROVIDER_TOKEN = "381764678:TEST:42000"  # РАБОЧИЙ ТЕСТОВЫЙ ТОКЕН
 
 # Цены в копейках
 PRICES = {
@@ -76,14 +76,18 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         INSERT OR IGNORE INTO users (user_id, username) 
         VALUES (?, ?)
     ''', (user.id, user.username))
-    conn.commit()
+    
+    # Получаем баланс
+    cursor.execute('SELECT balance FROM users WHERE user_id = ?', (user.id,))
+    result = cursor.fetchone()
+    balance = result[0] if result else 0
     conn.close()
     
     welcome_text = f"""
 🔓 <b>Добро пожаловать в VPN Сервис!</b>
 
 👤 <b>Ваш ID:</b> <code>{user.id}</code>
-💳 <b>Баланс:</b> 0 руб
+💳 <b>Баланс:</b> {balance} руб
 
 🚀 <b>Наши преимущества:</b>
 • Высокая скорость
@@ -105,8 +109,20 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def handle_balance(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Пополнение баланса"""
-    text = """
+    user = update.message.from_user
+    
+    # Получаем текущий баланс
+    conn = sqlite3.connect('vpn.db')
+    cursor = conn.cursor()
+    cursor.execute('SELECT balance FROM users WHERE user_id = ?', (user.id,))
+    result = cursor.fetchone()
+    balance = result[0] if result else 0
+    conn.close()
+    
+    text = f"""
 💳 <b>Пополнение баланса</b>
+
+💰 <b>Текущий баланс:</b> {balance} руб
 
 Выберите сумму для пополнения:
 
@@ -168,7 +184,8 @@ async def handle_statistics(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     # Получаем баланс
     cursor.execute('SELECT balance FROM users WHERE user_id = ?', (user_id,))
-    balance = cursor.fetchone()[0]
+    balance_result = cursor.fetchone()
+    balance = balance_result[0] if balance_result else 0
     
     # Получаем количество конфигов
     cursor.execute('SELECT COUNT(*) FROM vpn_configs WHERE user_id = ? AND is_active = TRUE', (user_id,))
@@ -302,6 +319,36 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
     
     elif data == 'refresh_stats':
         await handle_statistics(update, context)
+    
+    elif data == 'payment_history':
+        await show_payment_history(query, user_id)
+
+async def show_payment_history(query, user_id: int):
+    """Показать историю платежей"""
+    conn = sqlite3.connect('vpn.db')
+    cursor = conn.cursor()
+    cursor.execute('''
+        SELECT amount, tariff, status, payment_date 
+        FROM payments 
+        WHERE user_id = ? 
+        ORDER BY payment_date DESC 
+        LIMIT 10
+    ''', (user_id,))
+    payments = cursor.fetchall()
+    conn.close()
+    
+    if payments:
+        text = "📊 <b>История платежей:</b>\n\n"
+        for i, (amount, tariff, status, date) in enumerate(payments, 1):
+            status_icon = "✅" if status == 'success' else "❌"
+            text += f"{i}. {status_icon} {amount} руб - {tariff}\n   📅 {date[:16]}\n\n"
+    else:
+        text = "📊 <b>История платежей пуста</b>\n\nУ вас еще не было пополнений баланса."
+    
+    keyboard = [[InlineKeyboardButton("🔙 Назад", callback_data="back_to_balance")]]
+    reply_markup = InlineKeyboardMarkup(keyboard)
+    
+    await query.edit_message_text(text, reply_markup=reply_markup, parse_mode='HTML')
 
 async def create_invoice(query, tariff_id: str, title: str, description: str, price: int):
     """Создание инвойса для оплаты"""
@@ -322,11 +369,27 @@ async def create_invoice(query, tariff_id: str, title: str, description: str, pr
         )
         
     except Exception as e:
-        await query.message.reply_text(f"❌ Ошибка: {str(e)}")
+        await query.message.reply_text(f"❌ Ошибка при создании платежа: {str(e)}")
 
 async def create_vpn_config(query, user_id: int):
     """Создание VPN конфигурации"""
     try:
+        # Проверяем баланс
+        conn = sqlite3.connect('vpn.db')
+        cursor = conn.cursor()
+        cursor.execute('SELECT balance FROM users WHERE user_id = ?', (user_id,))
+        balance = cursor.fetchone()[0]
+        conn.close()
+        
+        if balance <= 0:
+            await query.edit_message_text(
+                "❌ <b>Недостаточно средств!</b>\n\n"
+                "Для создания конфигурации необходимо пополнить баланс.\n"
+                "Минимальная сумма: 149 руб (1 месяц)",
+                parse_mode='HTML'
+            )
+            return
+        
         # Генерируем уникальные данные
         config_name = f"config_{user_id}_{int(datetime.datetime.now().timestamp())}"
         vpn_username = f"user{user_id}"
@@ -369,13 +432,14 @@ async def successful_payment_handler(update: Update, context: ContextTypes.DEFAU
         amount = payment.total_amount // 100  # Переводим в рубли
         tariff = "custom"
         if hasattr(payment, 'invoice_payload') and payment.invoice_payload:
-            if '1_month' in payment.invoice_payload:
+            payload = payment.invoice_payload
+            if '1_month' in payload:
                 tariff = "1_month"
-            elif '3_months' in payment.invoice_payload:
+            elif '3_months' in payload:
                 tariff = "3_months"
-            elif '6_months' in payment.invoice_payload:
+            elif '6_months' in payload:
                 tariff = "6_months"
-            elif '12_months' in payment.invoice_payload:
+            elif '12_months' in payload:
                 tariff = "12_months"
         
         # Обновляем баланс в БД
@@ -392,16 +456,22 @@ async def successful_payment_handler(update: Update, context: ContextTypes.DEFAU
         ''', (user.id, amount, tariff, 'success', payment.provider_payment_charge_id))
         
         conn.commit()
+        
+        # Получаем обновленный баланс
+        cursor.execute('SELECT balance FROM users WHERE user_id = ?', (user.id,))
+        new_balance = cursor.fetchone()[0]
         conn.close()
         
         success_text = f"""
 🎉 <b>Платеж успешно завершен!</b>
 
 💳 <b>Сумма:</b> {amount} руб
-📧 <b>Email:</b> {payment.order_info.email if payment.order_info else 'не указан'}
+📧 <b>Email:</b> {payment.order_info.email if payment.order_info and payment.order_info.email else 'не указан'}
 ✅ <b>Статус:</b> Успешно
 
-💰 <b>Баланс пополнен на</b> {amount} руб
+💰 <b>Баланс пополнен!</b>
+• Было: {new_balance - amount} руб
+• Стало: {new_balance} руб
 
 Теперь вы можете создать конфигурацию в разделе "🔧 Мои конфиги"
 """
@@ -453,7 +523,10 @@ def main():
         
         print("🟢 VPN Bot запущен!")
         print("💎 Интерфейс как у OutlineVPN")
-        print("💰 Готов к приему платежей")
+        print("💰 ЮKassa платежи АКТИВИРОВАНЫ")
+        print("💳 Используйте тестовые карты:")
+        print("   • 5555 5555 5555 4444")
+        print("   • 2200 0000 0000 0004")
         
         application.run_polling()
         
