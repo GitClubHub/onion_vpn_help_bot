@@ -24,12 +24,9 @@ YOOKASSA_SHOP_ID = "1212021"
 YOOKASSA_SECRET_KEY = "test_WID1Xwp2NqxOeQ82EEEvsDhLI_dEcEGKeLrxr3qTKLk"
 YOOKASSA_API_URL = "https://api.yookassa.ru/v3/payments"
 
-# ⚡ ВАШИ РЕАЛЬНЫЕ ДАННЫЕ OUTLINE SERVER ⚡
+# Данные Outline Server
 OUTLINE_API_URL = "https://38.244.215.5:36538/bKNIHZi5uzkpxbWFLdkGdg"
-OUTLINE_SERVER_HOST = "38.244.215.5"
-OUTLINE_SERVER_PORT = "53944"
-OUTLINE_SERVER_ID = "bd1c3d9b-c33a-47cb-8cc5-8ce3b622fdc3"
-OUTLINE_VERIFY_SSL = False  # Для самоподписанных сертификатов
+OUTLINE_VERIFY_SSL = False
 
 # Цены в рублях
 PRICES = {
@@ -73,8 +70,6 @@ def init_db():
             config_name TEXT,
             access_key TEXT,
             outline_key_id TEXT,
-            server_host TEXT,
-            server_port TEXT,
             created_date TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
             expiry_date TIMESTAMP,
             is_active BOOLEAN DEFAULT TRUE
@@ -90,9 +85,7 @@ def create_real_outline_key():
     """Создание реального ключа через Outline API"""
     try:
         print("🔄 Создаю реальный ключ через Outline API...")
-        print(f"📡 Подключаюсь к: {OUTLINE_API_URL}")
         
-        # Создаем новый ключ доступа
         response = requests.post(
             f"{OUTLINE_API_URL}/access-keys",
             verify=OUTLINE_VERIFY_SSL,
@@ -105,86 +98,30 @@ def create_real_outline_key():
             key_data = response.json()
             access_url = key_data['accessUrl']
             key_id = key_data['id']
-            name = key_data.get('name', 'auto_generated')
             
             print(f"✅ Реальный ключ создан! ID: {key_id}")
-            print(f"🔑 URL: {access_url}")
-            
-            return access_url, key_id, name
+            return access_url, key_id
             
         else:
-            print(f"❌ Ошибка API: {response.status_code} - {response.text}")
-            return None, None, None
-            
-    except requests.exceptions.ConnectTimeout:
-        print("❌ Таймаут подключения к Outline API")
-        return None, None, None
-    except requests.exceptions.ConnectionError:
-        print("❌ Ошибка подключения к Outline API")
-        return None, None, None
-    except Exception as e:
-        print(f"❌ Неожиданная ошибка: {e}")
-        return None, None, None
-
-def set_outline_data_limit(key_id, limit_gb=1000):
-    """Установка лимита трафика"""
-    try:
-        if not key_id or key_id.startswith('demo_'):
-            return False
-            
-        bytes_limit = limit_gb * 1024 * 1024 * 1024
-        data = {"limit": {"bytes": bytes_limit}}
-        
-        response = requests.put(
-            f"{OUTLINE_API_URL}/access-keys/{key_id}/data-limit",
-            json=data,
-            verify=OUTLINE_VERIFY_SSL,
-            timeout=10
-        )
-        
-        if response.status_code == 204:
-            print(f"✅ Лимит {limit_gb}GB установлен для ключа {key_id}")
-            return True
-        else:
-            print(f"⚠️ Не удалось установить лимит: {response.status_code}")
-            return False
+            print(f"❌ Ошибка API: {response.status_code}")
+            return None, None
             
     except Exception as e:
-        print(f"⚠️ Ошибка установки лимита: {e}")
-        return False
-
-def get_outline_server_metrics():
-    """Получение метрик сервера"""
-    try:
-        response = requests.get(
-            f"{OUTLINE_API_URL}/metrics/transfer",
-            verify=OUTLINE_VERIFY_SSL,
-            timeout=10
-        )
-        
-        if response.status_code == 200:
-            metrics = response.json()
-            print(f"📊 Метрики сервера: {metrics}")
-            return metrics
-        return None
-    except Exception as e:
-        print(f"⚠️ Ошибка получения метрик: {e}")
-        return None
+        print(f"❌ Ошибка подключения: {e}")
+        return None, None
 
 def generate_demo_access_key():
-    """Генерация демо-ключа (если Outline API недоступен)"""
+    """Генерация демо-ключа"""
     methods = ["chacha20-ietf-poly1305", "aes-256-gcm"]
     method = random.choice(methods)
     password = ''.join(random.choice(string.ascii_letters + string.digits) for _ in range(32))
-    
-    # Используем реальные данные вашего сервера
-    server = OUTLINE_SERVER_HOST
-    port = OUTLINE_SERVER_PORT
+    server = "germany.outline-server.com"
+    port = random.randint(10000, 65535)
     
     config = f"{method}:{password}@{server}:{port}"
     encoded_config = base64.b64encode(config.encode()).decode()
     
-    return f"ss://{encoded_config}#Outline-Server-{OUTLINE_SERVER_HOST}"
+    return f"ss://{encoded_config}#Outline-Germany"
 
 def create_yookassa_payment(amount, tariff, user_id):
     """Создание платежа в ЮKassa"""
@@ -255,35 +192,28 @@ async def create_vpn_config_after_payment(query, user_id: int, amount: int, tari
         print(f"🎯 Автоматически создаю VPN ключ для {user_id}, тариф: {tariff}")
         
         # 1. Пытаемся создать реальный ключ через Outline API
-        access_key, key_id, key_name = create_real_outline_key()
+        access_key, key_id = create_real_outline_key()
         
         # 2. Если не удалось - создаем демо-ключ
         if not access_key:
             print("⚠️ Outline API недоступен, создаю демо-ключ")
             access_key = generate_demo_access_key()
             key_id = f"demo_{user_id}_{int(datetime.datetime.now().timestamp())}"
-            key_name = "demo_key"
         
-        # 3. Устанавливаем лимит трафика для реального ключа
-        if key_id and not key_id.startswith('demo_'):
-            set_outline_data_limit(key_id, 1000)  # 1000 GB лимит
-        
-        # 4. Сохраняем в базу данных
+        # 3. Сохраняем в базу данных
         expiry_date = calculate_expiry_date(tariff)
         
         conn = sqlite3.connect('vpn.db')
         cursor = conn.cursor()
         cursor.execute('''
             INSERT INTO vpn_configs 
-            (user_id, config_name, access_key, outline_key_id, server_host, server_port, expiry_date, is_active)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            (user_id, config_name, access_key, outline_key_id, expiry_date, is_active)
+            VALUES (?, ?, ?, ?, ?, ?)
         ''', (
             user_id, 
             f"outline_{tariff}_{user_id}",
             access_key, 
             key_id,
-            OUTLINE_SERVER_HOST,
-            OUTLINE_SERVER_PORT,
             expiry_date,
             True
         ))
@@ -292,7 +222,7 @@ async def create_vpn_config_after_payment(query, user_id: int, amount: int, tari
         
         print(f"✅ Ключ сохранен в БД для пользователя {user_id}")
         
-        # 5. Отправляем ключ пользователю
+        # 4. Отправляем ключ пользователю
         await send_vpn_key_to_user(query, access_key, amount, tariff, expiry_date, key_id)
         
     except Exception as e:
@@ -317,17 +247,16 @@ async def send_vpn_key_to_user(query, access_key, amount, tariff, expiry_date, k
     # Определяем тип ключа для сообщения
     is_demo = key_id.startswith('demo_') if key_id else True
     key_type = "🔴 ДЕМО-КЛЮЧ (для тестирования)" if is_demo else "🟢 РЕАЛЬНЫЙ КЛЮЧ"
-    server_info = f"🌐 Сервер: {OUTLINE_SERVER_HOST}:{OUTLINE_SERVER_PORT}"
     
     success_text = f"""
 🎉 <b>ОПЛАТА ПОДТВЕРЖДЕНА И КЛЮЧ СОЗДАН!</b>
 
 {key_type}
-{server_info}
 
 ✅ <b>Тариф:</b> {tariff_names.get(tariff, tariff)}
 💳 <b>Сумма:</b> {amount} руб
 📅 <b>Действует до:</b> {expiry_date.strftime('%d.%m.%Y')}
+🌍 <b>Локация:</b> Германия
 
 🔑 <b>ВАШ КЛЮЧ ДОСТУПА Outline:</b>
 <code>{access_key}</code>
@@ -346,10 +275,10 @@ async def send_vpn_key_to_user(query, access_key, amount, tariff, expiry_date, k
 4. <b>Нажмите "Подключиться"</b> - готово!
 
 ⭐ <b>Характеристики сервера:</b>
-• Локация: Германия/Нидерланды
+• Локация: Германия
 • Скорость: до 1 Гбит/с
 • Трафик: безлимитный
-• Защита: DDoS protection
+• Технология: Shadowsocks
 
 💡 <b>Сохраните этот ключ!</b> Он нужен для подключения на всех устройствах.
 
@@ -375,16 +304,16 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 👋 <b>Привет, {user.first_name}!</b>
 
-🚀 <b>Наш сервер Outline:</b>
-• Хост: <code>{OUTLINE_SERVER_HOST}</code>
-• Порт: <code>{OUTLINE_SERVER_PORT}</code>
-• Локация: Германия/Нидерланды
-• Технология: Outline (от Google)
+🚀 <b>О нашем сервисе:</b>
+• Высокопроизводительные сервера в Германии
+• Технология Outline от Google
+• Собственная инфраструктура
+• Автоматическая выдача ключей
 
 ⭐ <b>Преимущества:</b>
 • <b>Максимальная скорость</b> - до 1 Гбит/с
-• <b>Автоматическая выдача ключей</b> после оплаты
-• <b>Стабильное соединение</b> - обход блокировок
+• <b>Простая настройка</b> - один ключ для всех устройств
+• <b>Стабильное соединение</b> - надежная работа
 • <b>Безлимитный трафик</b> - никаких ограничений
 • <b>Поддержка 24/7</b> - всегда на связи
 
@@ -416,7 +345,7 @@ async def handle_balance(update: Update, context: ContextTypes.DEFAULT_TYPE):
 💳 <b>Пополнение баланса</b>
 
 💰 <b>Текущий баланс:</b> {balance} руб
-🌐 <b>Сервер:</b> {OUTLINE_SERVER_HOST}:{OUTLINE_SERVER_PORT}
+🌍 <b>Локация серверов:</b> Германия
 
 Выберите тариф:
 """
@@ -437,7 +366,7 @@ async def handle_balance(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def handle_instructions(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Инструкция по получению VPN"""
-    text = f"""
+    text = """
 📖 <b>ИНСТРУКЦИЯ ПО ПОЛУЧЕНИЮ OUTLINE VPN</b>
 
 🔹 <b>ШАГ 1: ОПЛАТА</b>
@@ -455,9 +384,9 @@ async def handle_instructions(update: Update, context: ContextTypes.DEFAULT_TYPE
 • Вставьте полученный ключ в программу
 • Нажмите "Подключиться" - готово!
 
-🖥 <b>Данные сервера:</b>
-• Хост: <code>{OUTLINE_SERVER_HOST}</code>
-• Порт: <code>{OUTLINE_SERVER_PORT}</code>
+🔧 <b>О ТЕХНОЛОГИИ SHADOWSOCKS:</b>
+Outline использует технологию Shadowsocks - это современный защищенный прокси-протокол. 
+Он обеспечивает стабильное соединение и высокую скорость за счет эффективного шифрования трафика.
 
 📲 <b>СКАЧАТЬ OUTLINE CLIENT:</b>
 
@@ -503,7 +432,7 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
 💳 <b>Оплата тарифа: {tariff_names[tariff]}</b>
 
 💰 <b>Сумма:</b> {amount} руб
-🌐 <b>Сервер:</b> {OUTLINE_SERVER_HOST}:{OUTLINE_SERVER_PORT}
+🌍 <b>Локация:</b> Германия
 
 👇 <b>Для оплаты нажмите на кнопку ниже:</b>
 
@@ -612,7 +541,7 @@ async def create_vpn_config(query, user_id: int):
             return
         
         # Создаем реальный или демо-ключ
-        access_key, key_id, key_name = create_real_outline_key()
+        access_key, key_id = create_real_outline_key()
         if not access_key:
             access_key = generate_demo_access_key()
             key_id = f"demo_{user_id}_{int(datetime.datetime.now().timestamp())}"
@@ -623,9 +552,9 @@ async def create_vpn_config(query, user_id: int):
         cursor = conn.cursor()
         cursor.execute('''
             INSERT INTO vpn_configs 
-            (user_id, config_name, access_key, outline_key_id, server_host, server_port, expiry_date, is_active)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-        ''', (user_id, f"manual_{user_id}", access_key, key_id, OUTLINE_SERVER_HOST, OUTLINE_SERVER_PORT, expiry_date, True))
+            (user_id, config_name, access_key, outline_key_id, expiry_date, is_active)
+            VALUES (?, ?, ?, ?, ?, ?)
+        ''', (user_id, f"manual_{user_id}", access_key, key_id, expiry_date, True))
         conn.commit()
         conn.close()
         
@@ -635,7 +564,7 @@ async def create_vpn_config(query, user_id: int):
 ✅ <b>Конфигурация создана!</b>
 
 {key_type}
-🌐 Сервер: {OUTLINE_SERVER_HOST}:{OUTLINE_SERVER_PORT}
+🌍 <b>Локация:</b> Германия
 
 🔑 <b>Ваш ключ доступа:</b>
 <code>{access_key}</code>
@@ -662,7 +591,7 @@ async def handle_my_configs(update: Update, context: ContextTypes.DEFAULT_TYPE):
     conn = sqlite3.connect('vpn.db')
     cursor = conn.cursor()
     cursor.execute('''
-        SELECT config_name, access_key, created_date, expiry_date, server_host, server_port 
+        SELECT config_name, access_key, created_date, expiry_date 
         FROM vpn_configs 
         WHERE user_id = ? AND is_active = TRUE 
         ORDER BY created_date DESC
@@ -672,15 +601,13 @@ async def handle_my_configs(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     if configs:
         text = "🔧 <b>Ваши конфигурации Outline:</b>\n\n"
-        for i, (name, access_key, created, expiry, host, port) in enumerate(configs, 1):
-            is_demo = "demo" in str(access_key) or "demo" in str(name)
+        for i, (name, access_key, created, expiry) in enumerate(configs, 1):
+            is_demo = "demo" in str(name) or "demo" in str(access_key)
             key_type = "🔴 ДЕМО" if is_demo else "🟢 РЕАЛЬНЫЙ"
             expiry_text = f"📅 Истекает: {expiry.strftime('%d.%m.%Y')}" if expiry else ""
-            server_info = f"🌐 {host}:{port}" if host and port else ""
             
             text += f"{i}. <b>{name}</b> {key_type}\n"
             text += f"   🔑 <code>{access_key}</code>\n"
-            text += f"   {server_info}\n"
             text += f"   📅 Создан: {created[:10]} {expiry_text}\n\n"
         
         keyboard = [
@@ -710,11 +637,6 @@ async def handle_support(update: Update, context: ContextTypes.DEFAULT_TYPE):
 • Проблемами с подключением
 • Оплатой и балансом
 • Автоматической выдачей ключей
-
-🌐 <b>Данные сервера:</b>
-• Хост: <code>{OUTLINE_SERVER_HOST}</code>
-• Порт: <code>{OUTLINE_SERVER_PORT}</code>
-• API: <code>{OUTLINE_API_URL[:50]}...</code>
 
 💬 <b>Напишите нам прямо сейчас!</b>
 
@@ -748,14 +670,13 @@ def main():
         
         print("🟢 VPN Bot запущен!")
         print("🔑 АВТОМАТИЧЕСКАЯ выдача Outline ключей")
-        print("🌐 Сервер:", OUTLINE_SERVER_HOST + ":" + OUTLINE_SERVER_PORT)
-        print("📡 API URL:", OUTLINE_API_URL)
+        print("🌍 Локация: Германия")
         print("💰 Интеграция с ЮKassa")
         print("🚀 Готов к работе!")
         
         # Тестируем подключение к Outline API
         print("🧪 Тестируем подключение к Outline API...")
-        access_key, key_id, name = create_real_outline_key()
+        access_key, key_id = create_real_outline_key()
         if access_key:
             print("✅ Outline API работает отлично!")
         else:
