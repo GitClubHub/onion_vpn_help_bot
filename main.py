@@ -59,7 +59,8 @@ def init_db():
             status TEXT,
             payment_date TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
             yookassa_payment_id TEXT UNIQUE,
-            confirmation_url TEXT
+            confirmation_url TEXT,
+            message_id INTEGER
         )
     ''')
     
@@ -123,7 +124,7 @@ def generate_demo_access_key():
     
     return f"ss://{encoded_config}#Outline-Germany"
 
-def create_yookassa_payment(amount, tariff, user_id):
+def create_yookassa_payment(amount, tariff, user_id, message_id=None):
     """Создание платежа в ЮKassa"""
     try:
         payment_id = f"vpn_{user_id}_{int(datetime.datetime.now().timestamp())}"
@@ -133,7 +134,7 @@ def create_yookassa_payment(amount, tariff, user_id):
             "payment_method_data": {"type": "bank_card"},
             "confirmation": {
                 "type": "redirect", 
-                "return_url": "https://t.me/your_bot"
+                "return_url": f"https://t.me/your_bot"
             },
             "capture": True,
             "description": f"Outline VPN подписка: {tariff}",
@@ -156,12 +157,13 @@ def create_yookassa_payment(amount, tariff, user_id):
             conn = sqlite3.connect('vpn.db')
             cursor = conn.cursor()
             cursor.execute('''
-                INSERT INTO payments (user_id, amount, tariff, status, yookassa_payment_id, confirmation_url)
-                VALUES (?, ?, ?, ?, ?, ?)
-            ''', (user_id, amount, tariff, 'pending', payment_info['id'], payment_info['confirmation']['confirmation_url']))
+                INSERT INTO payments (user_id, amount, tariff, status, yookassa_payment_id, confirmation_url, message_id)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+            ''', (user_id, amount, tariff, 'pending', payment_info['id'], payment_info['confirmation']['confirmation_url'], message_id))
             conn.commit()
             conn.close()
             
+            print(f"✅ Платеж создан: {payment_info['id']} для пользователя {user_id}")
             return payment_info['confirmation']['confirmation_url']
         else:
             print(f"❌ Ошибка ЮKassa API: {response.status_code}")
@@ -186,7 +188,7 @@ def calculate_expiry_date(tariff):
     else:
         return now + datetime.timedelta(days=30)
 
-async def create_vpn_config_after_payment(query, user_id: int, amount: int, tariff: str):
+async def create_vpn_config_after_payment(update, user_id: int, amount: int, tariff: str):
     """АВТОМАТИЧЕСКОЕ создание VPN конфигурации после оплаты"""
     try:
         print(f"🎯 Автоматически создаю VPN ключ для {user_id}, тариф: {tariff}")
@@ -223,18 +225,26 @@ async def create_vpn_config_after_payment(query, user_id: int, amount: int, tari
         print(f"✅ Ключ сохранен в БД для пользователя {user_id}")
         
         # 4. Отправляем ключ пользователю
-        await send_vpn_key_to_user(query, access_key, amount, tariff, expiry_date, key_id)
+        await send_vpn_key_to_user(update, access_key, amount, tariff, expiry_date, key_id)
         
     except Exception as e:
         print(f"❌ Ошибка создания конфига: {e}")
-        await query.edit_message_text(
-            "❌ <b>Ошибка при создании VPN ключа</b>\n\n"
-            "Пожалуйста, обратитесь в поддержку: @o0_Ai_Donna_0o\n"
-            "Мы решим проблему в течение 15 минут!",
-            parse_mode='HTML'
-        )
+        if hasattr(update, 'message'):
+            await update.message.reply_text(
+                "❌ <b>Ошибка при создании VPN ключа</b>\n\n"
+                "Пожалуйста, обратитесь в поддержку: @o0_Ai_Donna_0o\n"
+                "Мы решим проблему в течение 15 минут!",
+                parse_mode='HTML'
+            )
+        elif hasattr(update, 'callback_query'):
+            await update.callback_query.message.reply_text(
+                "❌ <b>Ошибка при создании VPN ключа</b>\n\n"
+                "Пожалуйста, обратитесь в поддержку: @o0_Ai_Donna_0o\n"
+                "Мы решим проблему в течение 15 минут!",
+                parse_mode='HTML'
+            )
 
-async def send_vpn_key_to_user(query, access_key, amount, tariff, expiry_date, key_id):
+async def send_vpn_key_to_user(update, access_key, amount, tariff, expiry_date, key_id):
     """Отправка ключа пользователю"""
     
     tariff_names = {
@@ -284,7 +294,84 @@ async def send_vpn_key_to_user(query, access_key, amount, tariff, expiry_date, k
 
 🛠 <b>Помощь:</b> @o0_Ai_Donna_0o
 """
-    await query.edit_message_text(success_text, parse_mode='HTML')
+
+    if hasattr(update, 'message'):
+        await update.message.reply_text(success_text, parse_mode='HTML')
+    elif hasattr(update, 'callback_query'):
+        await update.callback_query.message.reply_text(success_text, parse_mode='HTML')
+
+async def check_all_user_payments(user_id: int, update):
+    """Проверка ВСЕХ платежей пользователя"""
+    conn = sqlite3.connect('vpn.db')
+    cursor = conn.cursor()
+    
+    # Ищем ВСЕ pending платежи пользователя
+    cursor.execute('''
+        SELECT yookassa_payment_id, amount, tariff, status 
+        FROM payments 
+        WHERE user_id = ? AND status = 'pending'
+        ORDER BY payment_date DESC
+    ''', (user_id,))
+    
+    payments = cursor.fetchall()
+    conn.close()
+    
+    if not payments:
+        if hasattr(update, 'callback_query'):
+            await update.callback_query.message.reply_text(
+                "❌ <b>Не найдено ожидающих платежей</b>\n\n"
+                "Если вы уже оплатили, подождите 2-3 минуты и проверьте снова.",
+                parse_mode='HTML'
+            )
+        return
+    
+    processed_payments = 0
+    
+    for payment in payments:
+        payment_id, amount, tariff, status = payment
+        
+        try:
+            response = requests.get(
+                f"{YOOKASSA_API_URL}/{payment_id}",
+                auth=(YOOKASSA_SHOP_ID, YOOKASSA_SECRET_KEY)
+            )
+            
+            if response.status_code == 200:
+                payment_info = response.json()
+                
+                if payment_info['status'] == 'succeeded':
+                    # Платеж успешен - обновляем баланс и создаем ключ
+                    conn = sqlite3.connect('vpn.db')
+                    cursor = conn.cursor()
+                    cursor.execute('UPDATE payments SET status = "succeeded" WHERE yookassa_payment_id = ?', (payment_id,))
+                    cursor.execute('UPDATE users SET balance = balance + ? WHERE user_id = ?', (amount, user_id))
+                    conn.commit()
+                    conn.close()
+                    
+                    # АВТОМАТИЧЕСКИ СОЗДАЕМ КЛЮЧ!
+                    await create_vpn_config_after_payment(update, user_id, amount, tariff)
+                    processed_payments += 1
+                    
+                elif payment_info['status'] == 'pending':
+                    if hasattr(update, 'callback_query'):
+                        await update.callback_query.message.reply_text(
+                            f"⏳ <b>Платеж {amount} руб обрабатывается</b>\n\n"
+                            "Обычно это занимает 1-3 минуты. Проверьте снова через пару минут.",
+                            parse_mode='HTML'
+                        )
+                else:
+                    print(f"Платеж {payment_id} имеет статус: {payment_info['status']}")
+                    
+        except Exception as e:
+            print(f"Ошибка проверки платежа {payment_id}: {e}")
+    
+    if processed_payments == 0 and hasattr(update, 'callback_query'):
+        await update.callback_query.message.reply_text(
+            "⏳ <b>Платежи еще обрабатываются</b>\n\n"
+            "Если вы уже оплатили, подождите несколько минут и проверьте снова.\n"
+            "Или напишите в поддержку: @o0_Ai_Donna_0o",
+            parse_mode='HTML'
+        )
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Главное меню"""
@@ -304,27 +391,17 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 👋 <b>Привет, {user.first_name}!</b>
 
-🚀 <b>О нашем сервисе:</b>
-• Высокопроизводительные сервера в Германии
-• Технология Outline от Google
-• Собственная инфраструктура
-• Автоматическая выдача ключей
-
-⭐ <b>Преимущества:</b>
-• <b>Максимальная скорость</b> - до 1 Гбит/с
-• <b>Простая настройка</b> - один ключ для всех устройств
-• <b>Стабильное соединение</b> - надежная работа
-• <b>Безлимитный трафик</b> - никаких ограничений
-• <b>Поддержка 24/7</b> - всегда на связи
-
 💰 <b>Ваш баланс:</b> {balance} руб
+
+🚀 <b>Автоматическая выдача ключей после оплаты!</b>
 
 👇 <b>Выберите действие:</b>
 """
     
     keyboard = [
         [KeyboardButton("💰 Пополнить баланс"), KeyboardButton("🔧 Мои конфиги")],
-        [KeyboardButton("📖 Инструкция"), KeyboardButton("👨‍💻 Поддержка")]
+        [KeyboardButton("✅ Проверить оплату"), KeyboardButton("📖 Инструкция")],
+        [KeyboardButton("👨‍💻 Поддержка")]
     ]
     reply_markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
     
@@ -347,6 +424,8 @@ async def handle_balance(update: Update, context: ContextTypes.DEFAULT_TYPE):
 💰 <b>Текущий баланс:</b> {balance} руб
 🌍 <b>Локация серверов:</b> Германия
 
+💡 <b>После оплаты нажмите "✅ Проверить оплату" для получения ключа</b>
+
 Выберите тариф:
 """
     
@@ -362,50 +441,21 @@ async def handle_balance(update: Update, context: ContextTypes.DEFAULT_TYPE):
     ]
     reply_markup = InlineKeyboardMarkup(keyboard)
     
-    await update.message.reply_text(text, reply_markup=reply_markup, parse_mode='HTML')
+    # Сохраняем message_id для привязки платежа
+    message = await update.message.reply_text(text, reply_markup=reply_markup, parse_mode='HTML')
+    context.user_data['balance_message_id'] = message.message_id
 
-async def handle_instructions(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Инструкция по получению VPN"""
-    text = """
-📖 <b>ИНСТРУКЦИЯ ПО ПОЛУЧЕНИЮ OUTLINE VPN</b>
-
-🔹 <b>ШАГ 1: ОПЛАТА</b>
-• Нажмите "💰 Пополнить баланс"
-• Выберите подходящий тариф
-• Оплатите через безопасную страницу ЮKassa
-
-🔹 <b>ШАГ 2: АВТОМАТИЧЕСКОЕ ПОЛУЧЕНИЕ КЛЮЧА</b>
-• После оплаты нажмите "✅ Проверить оплату"
-• Система <b>АВТОМАТИЧЕСКИ</b> создаст ключ на сервере
-• Вы получите <b>реальный ключ доступа</b> к Outline VPN
-
-🔹 <b>ШАГ 3: НАСТРОЙКА</b>
-• Скачайте Outline Client по ссылке ниже
-• Вставьте полученный ключ в программу
-• Нажмите "Подключиться" - готово!
-
-🔧 <b>О ТЕХНОЛОГИИ SHADOWSOCKS:</b>
-Outline использует технологию Shadowsocks - это современный защищенный прокси-протокол. 
-Он обеспечивает стабильное соединение и высокую скорость за счет эффективного шифрования трафика.
-
-📲 <b>СКАЧАТЬ OUTLINE CLIENT:</b>
-
-<b>Официальный сайт:</b>
-https://getoutline.org/
-
-<b>Яндекс Диск (если не открывается):</b>
-https://disk.yandex.ru/d/TcLDT462de165g
-
-💡 <b>После оплаты вы АВТОМАТИЧЕСКИ получите реальный ключ!</b>
-"""
+async def handle_check_payment(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Проверка оплаты через кнопку"""
+    user_id = update.message.from_user.id
     
-    keyboard = [
-        [InlineKeyboardButton("💰 Начать - Пополнить баланс", callback_data="to_balance")],
-        [InlineKeyboardButton("🔧 Мои конфиги", callback_data="to_configs")]
-    ]
-    reply_markup = InlineKeyboardMarkup(keyboard)
+    await update.message.reply_text(
+        "🔄 <b>Проверяю все ваши платежи...</b>\n\n"
+        "Это займет несколько секунд.",
+        parse_mode='HTML'
+    )
     
-    await update.message.reply_text(text, reply_markup=reply_markup, parse_mode='HTML')
+    await check_all_user_payments(user_id, update)
 
 async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Обработка инлайн-кнопок"""
@@ -425,7 +475,10 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
         }
         amount = PRICES[tariff]
         
-        payment_url = create_yookassa_payment(amount, tariff, user_id)
+        # Получаем message_id из context
+        message_id = context.user_data.get('balance_message_id')
+        
+        payment_url = create_yookassa_payment(amount, tariff, user_id, message_id)
         
         if payment_url:
             payment_text = f"""
@@ -436,14 +489,16 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
 
 👇 <b>Для оплаты нажмите на кнопку ниже:</b>
 
-После успешной оплаты вернитесь в бот и нажмите кнопку "✅ Проверить оплату"
+💡 <b>ВАЖНО:</b> После оплаты вернитесь в бот и нажмите:
+• "✅ Проверить оплату" в главном меню
+• ИЛИ напишите /check_payment
 
 🔒 <b>Безопасная оплата через ЮKassa</b>
 """
             
             keyboard = [
                 [InlineKeyboardButton("🌐 Перейти к оплате", url=payment_url)],
-                [InlineKeyboardButton("✅ Проверить оплату", callback_data="check_payment")],
+                [InlineKeyboardButton("✅ Проверить оплату", callback_data="check_payment_global")],
                 [InlineKeyboardButton("🔙 Назад", callback_data="back_to_balance")]
             ]
             reply_markup = InlineKeyboardMarkup(keyboard)
@@ -455,8 +510,9 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
                 parse_mode='HTML'
             )
     
-    elif data == 'check_payment':
-        await check_payment_status(query, user_id)
+    elif data == 'check_payment_global':
+        await query.edit_message_text("🔄 Проверяю платежи...")
+        await check_all_user_payments(user_id, update)
     
     elif data == 'back_to_balance':
         await handle_balance(update, context)
@@ -473,116 +529,50 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
     elif data == 'show_instructions':
         await handle_instructions(update, context)
 
-async def check_payment_status(query, user_id: int):
-    """Проверка статуса платежа с АВТОМАТИЧЕСКИМ созданием ключа"""
-    conn = sqlite3.connect('vpn.db')
-    cursor = conn.cursor()
-    
-    cursor.execute('''
-        SELECT yookassa_payment_id, amount, tariff, status 
-        FROM payments 
-        WHERE user_id = ? AND status = 'pending'
-        ORDER BY payment_date DESC 
-        LIMIT 1
-    ''', (user_id,))
-    
-    payment = cursor.fetchone()
-    
-    if not payment:
-        await query.edit_message_text("❌ Не найдено ожидающих платежей")
-        conn.close()
-        return
-    
-    payment_id, amount, tariff, status = payment
-    
-    try:
-        response = requests.get(
-            f"{YOOKASSA_API_URL}/{payment_id}",
-            auth=(YOOKASSA_SHOP_ID, YOOKASSA_SECRET_KEY)
-        )
-        
-        if response.status_code == 200:
-            payment_info = response.json()
-            
-            if payment_info['status'] == 'succeeded':
-                # Обновляем баланс
-                cursor.execute('UPDATE payments SET status = "succeeded" WHERE yookassa_payment_id = ?', (payment_id,))
-                cursor.execute('UPDATE users SET balance = balance + ? WHERE user_id = ?', (amount, user_id))
-                conn.commit()
-                conn.close()
-                
-                # АВТОМАТИЧЕСКИ СОЗДАЕМ КЛЮЧ!
-                await create_vpn_config_after_payment(query, user_id, amount, tariff)
-                return
-                
-            elif payment_info['status'] == 'pending':
-                await query.edit_message_text("⏳ Платеж обрабатывается...")
-            else:
-                await query.edit_message_text(f"❌ Статус: {payment_info['status']}")
-        else:
-            await query.edit_message_text("❌ Ошибка проверки платежа")
-            
-    except Exception as e:
-        await query.edit_message_text(f"❌ Ошибка: {str(e)}")
-    
-    conn.close()
+async def handle_instructions(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Инструкция по получению VPN"""
+    text = """
+📖 <b>ИНСТРУКЦИЯ ПО ПОЛУЧЕНИЮ OUTLINE VPN</b>
 
-async def create_vpn_config(query, user_id: int):
-    """Создание VPN конфигурации по запросу"""
-    try:
-        conn = sqlite3.connect('vpn.db')
-        cursor = conn.cursor()
-        cursor.execute('SELECT balance FROM users WHERE user_id = ?', (user_id,))
-        balance = cursor.fetchone()[0]
-        conn.close()
-        
-        if balance <= 0:
-            await query.edit_message_text("❌ Недостаточно средств!")
-            return
-        
-        # Создаем реальный или демо-ключ
-        access_key, key_id = create_real_outline_key()
-        if not access_key:
-            access_key = generate_demo_access_key()
-            key_id = f"demo_{user_id}_{int(datetime.datetime.now().timestamp())}"
-        
-        expiry_date = datetime.datetime.now() + datetime.timedelta(days=30)
-        
-        conn = sqlite3.connect('vpn.db')
-        cursor = conn.cursor()
-        cursor.execute('''
-            INSERT INTO vpn_configs 
-            (user_id, config_name, access_key, outline_key_id, expiry_date, is_active)
-            VALUES (?, ?, ?, ?, ?, ?)
-        ''', (user_id, f"manual_{user_id}", access_key, key_id, expiry_date, True))
-        conn.commit()
-        conn.close()
-        
-        key_type = "🔴 ДЕМО-КЛЮЧ" if key_id.startswith('demo_') else "🟢 РЕАЛЬНЫЙ КЛЮЧ"
-        
-        success_text = f"""
-✅ <b>Конфигурация создана!</b>
+🔹 <b>ШАГ 1: ОПЛАТА</b>
+• Нажмите "💰 Пополнить баланс"
+• Выберите подходящий тариф
+• Оплатите через безопасную страницу ЮKassa
 
-{key_type}
-🌍 <b>Локация:</b> Германия
+🔹 <b>ШАГ 2: ПОЛУЧЕНИЕ КЛЮЧА</b>
+• После оплаты вернитесь в бот
+• Нажмите "✅ Проверить оплату" в главном меню
+• Система <b>АВТОМАТИЧЕСКИ</b> создаст ключ и отправит его вам
 
-🔑 <b>Ваш ключ доступа:</b>
-<code>{access_key}</code>
+🔹 <b>ШАГ 3: НАСТРОЙКА</b>
+• Скачайте Outline Client по ссылке ниже
+• Вставьте полученный ключ в программу
+• Нажмите "Подключиться" - готово!
 
-📖 <b>Инструкция по настройке:</b>
+🔧 <b>О ТЕХНОЛОГИИ SHADOWSOCKS:</b>
+Outline использует технологию Shadowsocks - это современный защищенный прокси-протокол. 
+Он обеспечивает стабильное соединение и высокую скорость за счет эффективного шифрования трафика.
 
-1. Скачайте Outline Client:
-   • https://getoutline.org/
-   • или Яндекс Диск: https://disk.yandex.ru/d/TcLDT462de165g
+📲 <b>СКАЧАТЬ OUTLINE CLIENT:</b>
 
-2. Вставьте ключ в программу и подключитесь!
+<b>Официальный сайт:</b>
+https://getoutline.org/
 
-💡 <b>Сохраните ключ!</b>
+<b>Яндекс Диск (если не открывается):</b>
+https://disk.yandex.ru/d/TcLDT462de165g
+
+💡 <b>После оплаты нажмите "✅ Проверить оплату" для получения ключа!</b>
 """
-        await query.edit_message_text(success_text, parse_mode='HTML')
-        
-    except Exception as e:
-        await query.edit_message_text(f"❌ Ошибка: {str(e)}")
+    
+    keyboard = [
+        [InlineKeyboardButton("💰 Пополнить баланс", callback_data="to_balance")],
+        [InlineKeyboardButton("✅ Проверить оплату", callback_data="check_payment_global")]
+    ]
+    reply_markup = InlineKeyboardMarkup(keyboard)
+    
+    await update.message.reply_text(text, reply_markup=reply_markup, parse_mode='HTML')
+
+# ... остальные функции handle_my_configs, create_vpn_config, handle_support остаются без изменений ...
 
 async def handle_my_configs(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Мои конфигурации"""
@@ -652,6 +642,8 @@ async def handle_all_messages(update: Update, context: ContextTypes.DEFAULT_TYPE
         await handle_balance(update, context)
     elif text == "🔧 Мои конфиги":
         await handle_my_configs(update, context)
+    elif text == "✅ Проверить оплату":
+        await handle_check_payment(update, context)
     elif text == "📖 Инструкция":
         await handle_instructions(update, context)
     elif text == "👨‍💻 Поддержка":
@@ -665,22 +657,15 @@ def main():
         application = Application.builder().token(BOT_TOKEN).build()
         
         application.add_handler(CommandHandler("start", start))
+        application.add_handler(CommandHandler("check_payment", handle_check_payment))
         application.add_handler(CallbackQueryHandler(handle_callback_query))
         application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_all_messages))
         
         print("🟢 VPN Bot запущен!")
         print("🔑 АВТОМАТИЧЕСКАЯ выдача Outline ключей")
-        print("🌍 Локация: Германия")
         print("💰 Интеграция с ЮKassa")
+        print("✅ Глобальная проверка платежей")
         print("🚀 Готов к работе!")
-        
-        # Тестируем подключение к Outline API
-        print("🧪 Тестируем подключение к Outline API...")
-        access_key, key_id = create_real_outline_key()
-        if access_key:
-            print("✅ Outline API работает отлично!")
-        else:
-            print("⚠️ Outline API недоступен, используется демо-режим")
         
         application.run_polling()
         
