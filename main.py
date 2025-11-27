@@ -131,7 +131,7 @@ def generate_demo_access_key():
     return f"ss://{encoded_config}#Outline-{SERVER_LOCATION}"
 
 def create_yookassa_payment(amount, tariff, user_id, message_id=None):
-    """Упрощенная версия создания платежа"""
+    """Создание платежа в ЮKassa с чеком"""
     try:
         payment_data = {
             "amount": {
@@ -143,7 +143,25 @@ def create_yookassa_payment(amount, tariff, user_id, message_id=None):
                 "return_url": "https://t.me/your_bot"
             },
             "capture": True,
-            "description": f"VPN: {TARIFF_NAMES[tariff]}"
+            "description": f"VPN: {TARIFF_NAMES[tariff]}",
+            "receipt": {
+                "customer": {
+                    "email": f"user{user_id}@example.com"
+                },
+                "items": [
+                    {
+                        "description": f"Outline VPN - {TARIFF_NAMES[tariff]}",
+                        "quantity": "1",
+                        "amount": {
+                            "value": f"{amount}.00",
+                            "currency": "RUB"
+                        },
+                        "vat_code": "1",
+                        "payment_mode": "full_payment",
+                        "payment_subject": "service"
+                    }
+                ]
+            }
         }
         
         response = requests.post(
@@ -419,17 +437,29 @@ async def debug_yookassa(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     await update.message.reply_text("🔍 Запускаю диагностику ЮKassa...")
     
-    # Тест 1: Проверка аутентификации
-    test_url = "https://api.yookassa.ru/v3/payments"
+    # Тест с чеком
     test_data = {
         "amount": {"value": "1.00", "currency": "RUB"},
         "confirmation": {"type": "redirect", "return_url": "https://t.me/test_bot"},
-        "description": "Test payment"
+        "description": "Test payment",
+        "receipt": {
+            "customer": {"email": "test@example.com"},
+            "items": [
+                {
+                    "description": "Test VPN",
+                    "quantity": "1",
+                    "amount": {"value": "1.00", "currency": "RUB"},
+                    "vat_code": "1",
+                    "payment_mode": "full_payment",
+                    "payment_subject": "service"
+                }
+            ]
+        }
     }
     
     try:
         response = requests.post(
-            test_url,
+            YOOKASSA_API_URL,
             auth=(YOOKASSA_SHOP_ID, YOOKASSA_SECRET_KEY),
             headers={
                 'Content-Type': 'application/json',
@@ -443,8 +473,6 @@ async def debug_yookassa(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await update.message.reply_text("✅ ЮKassa API доступен! Аутентификация успешна.")
         elif response.status_code == 401:
             await update.message.reply_text("❌ Ошибка аутентификации ЮKassa - проверьте Shop ID и Secret Key")
-        elif response.status_code == 402:
-            await update.message.reply_text("❌ Ошибка формата данных ЮKassa")
         else:
             await update.message.reply_text(f"❌ Ошибка ЮKassa: {response.status_code}\n{response.text}")
             
@@ -469,9 +497,8 @@ async def test_outline(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(f"❌ Ошибка подключения к Outline: {e}")
 
 async def test_payment_simple(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Простой тест платежа с минимальными данными"""
+    """Простой тест платежа с чеком"""
     try:
-        # Минимальные данные для теста
         payment_data = {
             "amount": {
                 "value": "149.00",
@@ -481,7 +508,25 @@ async def test_payment_simple(update: Update, context: ContextTypes.DEFAULT_TYPE
                 "type": "redirect",
                 "return_url": "https://t.me/test_bot"
             },
-            "description": "Test VPN Payment"
+            "description": "Test VPN Payment",
+            "receipt": {
+                "customer": {
+                    "email": "test@example.com"
+                },
+                "items": [
+                    {
+                        "description": "Outline VPN - 1 месяц",
+                        "quantity": "1",
+                        "amount": {
+                            "value": "149.00",
+                            "currency": "RUB"
+                        },
+                        "vat_code": "1",
+                        "payment_mode": "full_payment",
+                        "payment_subject": "service"
+                    }
+                ]
+            }
         }
         
         idempotence_key = str(uuid.uuid4())
@@ -491,7 +536,7 @@ async def test_payment_simple(update: Update, context: ContextTypes.DEFAULT_TYPE
         print(f"Shop ID: {YOOKASSA_SHOP_ID}")
         print(f"Secret Key: {YOOKASSA_SECRET_KEY[:20]}...")
         print(f"Idempotence Key: {idempotence_key}")
-        print(f"Data: {json.dumps(payment_data, indent=2)}")
+        print(f"Data: {json.dumps(payment_data, indent=2, ensure_ascii=False)}")
         
         response = requests.post(
             YOOKASSA_API_URL,
@@ -890,7 +935,8 @@ def main():
         print("🟢 VPN Bot запущен!")
         print(f"🔑 Outline Server: {SERVER_LOCATION}")
         print("💰 Интеграция с ЮKassa")
-        print("✅ Автоматическая выдача ключей")
+        print("✅ Автоматическая выдача ключей") 
+        print("📋 Обязательные чеки по ФЗ-54")
         print("🚀 Готов к работе!")
         
         application.run_polling()
