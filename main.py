@@ -8,6 +8,7 @@ import base64
 import random
 import string
 import uuid
+import traceback
 from telegram import Update, ReplyKeyboardMarkup, KeyboardButton, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes, CallbackQueryHandler
 
@@ -144,6 +145,10 @@ def create_yookassa_payment(amount, tariff, user_id, message_id=None):
             },
             "capture": True,
             "description": f"VPN: {TARIFF_NAMES[tariff]}",
+            "metadata": {
+                "user_id": user_id,
+                "tariff": tariff
+            },
             "receipt": {
                 "customer": {
                     "email": f"user{user_id}@example.com"
@@ -324,21 +329,39 @@ async def send_vpn_key_to_user(user_id: int, access_key: str, amount: int, tarif
         print(f"❌ Ошибка отправки ключа пользователю: {e}")
 
 async def check_payment_status(payment_id: str, user_id: int, update: Update = None):
-    """Проверка статуса конкретного платежа"""
+    """Проверка статуса конкретного платежа - ИСПРАВЛЕННАЯ ВЕРСИЯ"""
     try:
+        print(f"🔍 Проверяю платеж {payment_id} для пользователя {user_id}")
+        
         response = requests.get(
             f"{YOOKASSA_API_URL}/{payment_id}",
             auth=(YOOKASSA_SHOP_ID, YOOKASSA_SECRET_KEY),
             timeout=30
         )
         
+        print(f"📊 Ответ от ЮKassa: {response.status_code}")
+        
         if response.status_code == 200:
             payment_info = response.json()
+            print(f"📄 Статус платежа: {payment_info['status']}")
             
             if payment_info['status'] == 'succeeded':
                 # Платеж успешен!
                 amount = int(float(payment_info['amount']['value']))
-                tariff = payment_info['metadata']['tariff']
+                
+                # Получаем тариф из metadata или из БД
+                if 'metadata' in payment_info and 'tariff' in payment_info['metadata']:
+                    tariff = payment_info['metadata']['tariff']
+                else:
+                    # Если нет в metadata, берем из БД
+                    conn = sqlite3.connect('vpn.db', check_same_thread=False)
+                    cursor = conn.cursor()
+                    cursor.execute('SELECT tariff FROM payments WHERE yookassa_payment_id = ?', (payment_id,))
+                    result = cursor.fetchone()
+                    tariff = result[0] if result else "1_month"
+                    conn.close()
+                
+                print(f"✅ Платеж подтвержден! Сумма: {amount}, Тариф: {tariff}")
                 
                 # Обновляем статус в БД
                 conn = sqlite3.connect('vpn.db', check_same_thread=False)
@@ -354,7 +377,7 @@ async def check_payment_status(payment_id: str, user_id: int, update: Update = N
                 conn.commit()
                 conn.close()
                 
-                print(f"✅ Платеж {payment_id} подтвержден для пользователя {user_id}")
+                print(f"✅ База данных обновлена для пользователя {user_id}")
                 
                 # Автоматически создаем VPN ключ
                 await create_vpn_config_after_payment(user_id, amount, tariff, update)
@@ -362,6 +385,12 @@ async def check_payment_status(payment_id: str, user_id: int, update: Update = N
                 
             elif payment_info['status'] == 'pending':
                 print(f"⏳ Платеж {payment_id} все еще обрабатывается")
+                if update and hasattr(update, 'callback_query'):
+                    await update.callback_query.message.reply_text(
+                        "⏳ <b>Платеж еще обрабатывается</b>\n\n"
+                        "Обычно это занимает 1-3 минуты. Проверьте снова через пару минут.",
+                        parse_mode='HTML'
+                    )
                 return False
             else:
                 print(f"❌ Платеж {payment_id} имеет статус: {payment_info['status']}")
@@ -369,10 +398,12 @@ async def check_payment_status(payment_id: str, user_id: int, update: Update = N
                 
         else:
             print(f"❌ Ошибка проверки платежа {payment_id}: {response.status_code}")
+            print(f"❌ Текст ошибки: {response.text}")
             return False
             
     except Exception as e:
         print(f"❌ Исключение при проверке платежа: {e}")
+        traceback.print_exc()
         return False
 
 async def check_all_user_payments(user_id: int, update: Update):
@@ -410,6 +441,7 @@ async def check_all_user_payments(user_id: int, update: Update):
     
     for payment in payments:
         payment_id, amount, tariff, status = payment
+        print(f"🔍 Проверяю платеж: {payment_id}")
         
         success = await check_payment_status(payment_id, user_id, update)
         if success:
@@ -430,6 +462,69 @@ async def check_all_user_payments(user_id: int, update: Update):
                 f"Или напишите в поддержку: {SUPPORT_USERNAME}",
                 parse_mode='HTML'
             )
+
+async def force_check_payment(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Принудительная проверка всех платежей"""
+    user_id = update.message.from_user.id
+    
+    await update.message.reply_text(
+        "🔄 <b>Принудительно проверяю все платежи...</b>\n\n"
+        "Это займет несколько секунд.",
+        parse_mode='HTML'
+    )
+    
+    conn = sqlite3.connect('vpn.db', check_same_thread=False)
+    cursor = conn.cursor()
+    
+    # Ищем ВСЕ платежи пользователя (не только pending)
+    cursor.execute('''
+        SELECT yookassa_payment_id, amount, tariff, status 
+        FROM payments 
+        WHERE user_id = ? 
+        ORDER BY payment_date DESC
+    ''', (user_id,))
+    
+    payments = cursor.fetchall()
+    conn.close()
+    
+    if not payments:
+        await update.message.reply_text(
+            "❌ <b>Не найдено платежей</b>\n\n"
+            "Сначала создайте платеж через '💰 Пополнить баланс'",
+            parse_mode='HTML'
+        )
+        return
+    
+    found_payments = False
+    
+    for payment in payments:
+        payment_id, amount, tariff, status = payment
+        
+        print(f"🔍 Проверяю платеж: {payment_id}, статус: {status}")
+        
+        if status == 'succeeded':
+            await update.message.reply_text(
+                f"✅ <b>Платеж уже подтвержден!</b>\n\n"
+                f"💰 Сумма: {amount} руб\n"
+                f"📋 Тариф: {TARIFF_NAMES.get(tariff, tariff)}\n"
+                f"🔑 Ключ должен быть в '🔧 Мои конфиги'",
+                parse_mode='HTML'
+            )
+            found_payments = True
+            break
+        else:
+            success = await check_payment_status(payment_id, user_id, update)
+            if success:
+                found_payments = True
+                break
+    
+    if not found_payments:
+        await update.message.reply_text(
+            "⏳ <b>Платежи еще обрабатываются</b>\n\n"
+            "Если вы уже оплатили, подождите несколько минут и проверьте снова.\n"
+            f"Или напишите в поддержку: {SUPPORT_USERNAME}",
+            parse_mode='HTML'
+        )
 
 async def debug_yookassa(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Диагностика подключения к ЮKassa"""
@@ -793,7 +888,7 @@ https://disk.yandex.ru/d/TcLDT462de165g
 💡 <b>После оплаты нажмите "✅ Проверить оплату" для получения ключа!</b>
 """
     
-    keyboard = [
+        keyboard = [
         [InlineKeyboardButton("💰 Пополнить баланс", callback_data="to_balance")],
         [InlineKeyboardButton("✅ Проверить оплату", callback_data="check_payment_global")]
     ]
@@ -928,6 +1023,7 @@ def main():
         application.add_handler(CommandHandler("debug", debug_yookassa))
         application.add_handler(CommandHandler("test_outline", test_outline))
         application.add_handler(CommandHandler("test_pay", test_payment_simple))
+        application.add_handler(CommandHandler("force_check", force_check_payment))
         
         application.add_handler(CallbackQueryHandler(handle_callback_query))
         application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_all_messages))
@@ -937,13 +1033,13 @@ def main():
         print("💰 Интеграция с ЮKassa")
         print("✅ Автоматическая выдача ключей") 
         print("📋 Обязательные чеки по ФЗ-54")
+        print("🔍 Подробное логирование")
         print("🚀 Готов к работе!")
         
         application.run_polling()
         
     except Exception as e:
         print(f"🔴 Критическая ошибка: {e}")
-        import traceback
         traceback.print_exc()
         print("🔄 Перезапуск через 10 секунд...")
         import time
