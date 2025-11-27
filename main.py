@@ -131,57 +131,38 @@ def generate_demo_access_key():
     return f"ss://{encoded_config}#Outline-{SERVER_LOCATION}"
 
 def create_yookassa_payment(amount, tariff, user_id, message_id=None):
-    """Создание платежа в ЮKassa - ВЕРСИЯ С ДИАГНОСТИКОЙ"""
+    """Упрощенная версия создания платежа"""
     try:
-        idempotence_key = str(uuid.uuid4())
-        
         payment_data = {
             "amount": {
                 "value": f"{amount}.00",
                 "currency": "RUB"
             },
-            "payment_method_data": {
-                "type": "bank_card"
-            },
             "confirmation": {
-                "type": "redirect", 
-                "return_url": "https://t.me/your_vpn_bot"
+                "type": "redirect",
+                "return_url": "https://t.me/your_bot"
             },
             "capture": True,
-            "description": f"Outline VPN - {TARIFF_NAMES.get(tariff, tariff)}",
-            "metadata": {
-                "user_id": user_id,
-                "tariff": tariff
-            }
+            "description": f"VPN: {TARIFF_NAMES[tariff]}"
         }
-        
-        print("=" * 50)
-        print("🔍 ДИАГНОСТИКА ЮKASSA:")
-        print(f"💰 Сумма: {amount} RUB")
-        print(f"📋 Тариф: {tariff}")
-        print(f"👤 User ID: {user_id}")
-        print(f"🔑 Idempotence Key: {idempotence_key}")
-        print(f"📊 Данные: {json.dumps(payment_data, indent=2, ensure_ascii=False)}")
         
         response = requests.post(
             YOOKASSA_API_URL,
             auth=(YOOKASSA_SHOP_ID, YOOKASSA_SECRET_KEY),
             headers={
                 'Content-Type': 'application/json',
-                'Idempotence-Key': idempotence_key
+                'Idempotence-Key': str(uuid.uuid4())
             },
-            data=json.dumps(payment_data),
+            json=payment_data,
             timeout=30
         )
         
-        print(f"📥 Ответ ЮKassa: {response.status_code}")
-        print(f"📄 Текст ответа: {response.text}")
-        print("=" * 50)
+        print(f"🔍 Статус ответа ЮKassa: {response.status_code}")
         
         if response.status_code == 200:
-            payment_info = response.json()
-            confirmation_url = payment_info['confirmation']['confirmation_url']
-            yookassa_id = payment_info['id']
+            data = response.json()
+            confirmation_url = data['confirmation']['confirmation_url']
+            yookassa_id = data['id']
             
             # Сохраняем платеж в БД
             conn = sqlite3.connect('vpn.db', check_same_thread=False)
@@ -196,15 +177,9 @@ def create_yookassa_payment(amount, tariff, user_id, message_id=None):
             
             print(f"✅ Платеж создан: {yookassa_id}")
             return confirmation_url
-            
         else:
-            print(f"❌ Ошибка ЮKassa API: {response.status_code}")
-            # Пытаемся распарсить ошибку
-            try:
-                error_info = response.json()
-                print(f"❌ Детали ошибки: {error_info}")
-            except:
-                pass
+            print(f"❌ Ошибка ЮKassa: {response.status_code}")
+            print(f"❌ Текст ошибки: {response.text}")
             return None
             
     except Exception as e:
@@ -448,7 +423,6 @@ async def debug_yookassa(update: Update, context: ContextTypes.DEFAULT_TYPE):
     test_url = "https://api.yookassa.ru/v3/payments"
     test_data = {
         "amount": {"value": "1.00", "currency": "RUB"},
-        "payment_method_data": {"type": "bank_card"},
         "confirmation": {"type": "redirect", "return_url": "https://t.me/test_bot"},
         "description": "Test payment"
     }
@@ -461,7 +435,7 @@ async def debug_yookassa(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 'Content-Type': 'application/json',
                 'Idempotence-Key': str(uuid.uuid4())
             },
-            data=json.dumps(test_data),
+            json=test_data,
             timeout=10
         )
         
@@ -493,6 +467,68 @@ async def test_outline(update: Update, context: ContextTypes.DEFAULT_TYPE):
             
     except Exception as e:
         await update.message.reply_text(f"❌ Ошибка подключения к Outline: {e}")
+
+async def test_payment_simple(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Простой тест платежа с минимальными данными"""
+    try:
+        # Минимальные данные для теста
+        payment_data = {
+            "amount": {
+                "value": "149.00",
+                "currency": "RUB"
+            },
+            "confirmation": {
+                "type": "redirect",
+                "return_url": "https://t.me/test_bot"
+            },
+            "description": "Test VPN Payment"
+        }
+        
+        idempotence_key = str(uuid.uuid4())
+        
+        print("🔍 ТЕСТОВЫЙ ЗАПРОС:")
+        print(f"URL: {YOOKASSA_API_URL}")
+        print(f"Shop ID: {YOOKASSA_SHOP_ID}")
+        print(f"Secret Key: {YOOKASSA_SECRET_KEY[:20]}...")
+        print(f"Idempotence Key: {idempotence_key}")
+        print(f"Data: {json.dumps(payment_data, indent=2)}")
+        
+        response = requests.post(
+            YOOKASSA_API_URL,
+            auth=(YOOKASSA_SHOP_ID, YOOKASSA_SECRET_KEY),
+            headers={
+                'Content-Type': 'application/json',
+                'Idempotence-Key': idempotence_key
+            },
+            json=payment_data,
+            timeout=30
+        )
+        
+        print(f"📥 ОТВЕТ: {response.status_code}")
+        print(f"📄 ТЕКСТ ОТВЕТА: {response.text}")
+        
+        if response.status_code == 200:
+            data = response.json()
+            await update.message.reply_text(
+                f"✅ Платеж создан!\n"
+                f"ID: {data['id']}\n"
+                f"URL: {data['confirmation']['confirmation_url']}",
+                parse_mode='HTML'
+            )
+        else:
+            error_msg = f"❌ Ошибка: {response.status_code}\n"
+            try:
+                error_data = response.json()
+                error_msg += f"Детали: {error_data}"
+            except:
+                error_msg += f"Текст: {response.text}"
+            
+            await update.message.reply_text(error_msg)
+            
+    except Exception as e:
+        error_text = f"❌ Исключение: {str(e)}"
+        print(error_text)
+        await update.message.reply_text(error_text)
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Главное меню"""
@@ -844,8 +880,9 @@ def main():
         application.add_handler(CommandHandler("configs", handle_my_configs))
         application.add_handler(CommandHandler("support", handle_support))
         application.add_handler(CommandHandler("instructions", handle_instructions))
-        application.add_handler(CommandHandler("debug", debug_yookassa))  # ← ЗДЕСЬ БЫЛА ОШИБКА
+        application.add_handler(CommandHandler("debug", debug_yookassa))
         application.add_handler(CommandHandler("test_outline", test_outline))
+        application.add_handler(CommandHandler("test_pay", test_payment_simple))
         
         application.add_handler(CallbackQueryHandler(handle_callback_query))
         application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_all_messages))
