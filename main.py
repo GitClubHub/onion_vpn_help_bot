@@ -20,8 +20,8 @@ logging.basicConfig(
 BOT_TOKEN = "8222449218:AAFgj48oh7Qczvre3l17Tr4FLWmzlWZKVtM"
 
 # Данные ЮKassa API
-YOOKASSA_SHOP_ID = "1212021"
-YOOKASSA_SECRET_KEY = "test_WID1Xwp2NqxOeQ82EEEvsDhLI_dEcEGKeLrxr3qTKLk"
+YOOKASSA_SHOP_ID = "1209387"
+YOOKASSA_SECRET_KEY = "live_R__UrA2rVtI3qv0XHGoRbePpRxpaMoy7QXKXCLKIYhw"
 YOOKASSA_API_URL = "https://api.yookassa.ru/v3/payments"
 
 # Данные Outline Server
