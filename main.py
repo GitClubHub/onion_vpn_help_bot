@@ -7,6 +7,7 @@ import json
 import base64
 import random
 import string
+import uuid
 from telegram import Update, ReplyKeyboardMarkup, KeyboardButton, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes, CallbackQueryHandler
 
@@ -130,47 +131,52 @@ def generate_demo_access_key():
     return f"ss://{encoded_config}#Outline-{SERVER_LOCATION}"
 
 def create_yookassa_payment(amount, tariff, user_id, message_id=None):
-    """Создание платежа в ЮKassa"""
+    """Создание платежа в ЮKassa - ВЕРСИЯ С ДИАГНОСТИКОЙ"""
     try:
-        payment_id = f"vpn_{user_id}_{int(datetime.datetime.now().timestamp())}"
+        idempotence_key = str(uuid.uuid4())
         
         payment_data = {
             "amount": {
-                "value": f"{amount:.2f}",
+                "value": f"{amount}.00",
                 "currency": "RUB"
             },
             "payment_method_data": {
                 "type": "bank_card"
             },
             "confirmation": {
-                "type": "redirect",
+                "type": "redirect", 
                 "return_url": "https://t.me/your_vpn_bot"
             },
             "capture": True,
-            "description": f"Outline VPN - {TARIFF_NAMES[tariff]}",
+            "description": f"Outline VPN - {TARIFF_NAMES.get(tariff, tariff)}",
             "metadata": {
                 "user_id": user_id,
                 "tariff": tariff
             }
         }
         
-        auth = (YOOKASSA_SHOP_ID, YOOKASSA_SECRET_KEY)
-        headers = {
-            'Content-Type': 'application/json',
-            'Idempotence-Key': payment_id
-        }
-        
-        print(f"🔄 Создаю платеж для пользователя {user_id}, сумма: {amount} руб")
+        print("=" * 50)
+        print("🔍 ДИАГНОСТИКА ЮKASSA:")
+        print(f"💰 Сумма: {amount} RUB")
+        print(f"📋 Тариф: {tariff}")
+        print(f"👤 User ID: {user_id}")
+        print(f"🔑 Idempotence Key: {idempotence_key}")
+        print(f"📊 Данные: {json.dumps(payment_data, indent=2, ensure_ascii=False)}")
         
         response = requests.post(
             YOOKASSA_API_URL,
-            auth=auth,
-            headers=headers,
+            auth=(YOOKASSA_SHOP_ID, YOOKASSA_SECRET_KEY),
+            headers={
+                'Content-Type': 'application/json',
+                'Idempotence-Key': idempotence_key
+            },
             data=json.dumps(payment_data),
             timeout=30
         )
         
-        print(f"📊 Ответ ЮKassa: {response.status_code}")
+        print(f"📥 Ответ ЮKassa: {response.status_code}")
+        print(f"📄 Текст ответа: {response.text}")
+        print("=" * 50)
         
         if response.status_code == 200:
             payment_info = response.json()
@@ -190,9 +196,15 @@ def create_yookassa_payment(amount, tariff, user_id, message_id=None):
             
             print(f"✅ Платеж создан: {yookassa_id}")
             return confirmation_url
+            
         else:
             print(f"❌ Ошибка ЮKassa API: {response.status_code}")
-            print(f"❌ Текст ошибки: {response.text}")
+            # Пытаемся распарсить ошибку
+            try:
+                error_info = response.json()
+                print(f"❌ Детали ошибки: {error_info}")
+            except:
+                pass
             return None
             
     except Exception as e:
@@ -255,7 +267,6 @@ async def create_vpn_config_after_payment(user_id: int, amount: int, tariff: str
         
     except Exception as e:
         print(f"❌ Ошибка создания конфига: {e}")
-        # Отправляем сообщение об ошибке
         if update and hasattr(update, 'message'):
             await update.message.reply_text(
                 "❌ <b>Ошибка при создании VPN ключа</b>\n\n"
@@ -316,11 +327,6 @@ async def send_vpn_key_to_user(user_id: int, access_key: str, amount: int, tarif
                 await update.message.reply_text(success_text, parse_mode='HTML')
             elif hasattr(update, 'callback_query'):
                 await update.callback_query.message.reply_text(success_text, parse_mode='HTML')
-        else:
-            # Если update нет, используем context для отправки
-            from telegram.ext import ContextTypes
-            # Этот случай обрабатывается в check_payment_status
-            pass
     except Exception as e:
         print(f"❌ Ошибка отправки ключа пользователю: {e}")
 
@@ -431,6 +437,62 @@ async def check_all_user_payments(user_id: int, update: Update):
                 f"Или напишите в поддержку: {SUPPORT_USERNAME}",
                 parse_mode='HTML'
             )
+
+async def debug_yookassa(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Диагностика подключения к ЮKassa"""
+    user_id = update.message.from_user.id
+    
+    await update.message.reply_text("🔍 Запускаю диагностику ЮKassa...")
+    
+    # Тест 1: Проверка аутентификации
+    test_url = "https://api.yookassa.ru/v3/payments"
+    test_data = {
+        "amount": {"value": "1.00", "currency": "RUB"},
+        "payment_method_data": {"type": "bank_card"},
+        "confirmation": {"type": "redirect", "return_url": "https://t.me/test_bot"},
+        "description": "Test payment"
+    }
+    
+    try:
+        response = requests.post(
+            test_url,
+            auth=(YOOKASSA_SHOP_ID, YOOKASSA_SECRET_KEY),
+            headers={
+                'Content-Type': 'application/json',
+                'Idempotence-Key': str(uuid.uuid4())
+            },
+            data=json.dumps(test_data),
+            timeout=10
+        )
+        
+        if response.status_code == 200:
+            await update.message.reply_text("✅ ЮKassa API доступен! Аутентификация успешна.")
+        elif response.status_code == 401:
+            await update.message.reply_text("❌ Ошибка аутентификации ЮKassa - проверьте Shop ID и Secret Key")
+        elif response.status_code == 402:
+            await update.message.reply_text("❌ Ошибка формата данных ЮKassa")
+        else:
+            await update.message.reply_text(f"❌ Ошибка ЮKassa: {response.status_code}\n{response.text}")
+            
+    except Exception as e:
+        await update.message.reply_text(f"❌ Ошибка подключения: {e}")
+
+async def test_outline(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Тест подключения к Outline API"""
+    try:
+        response = requests.get(
+            f"{OUTLINE_API_URL}/access-keys",
+            verify=OUTLINE_VERIFY_SSL,
+            timeout=10
+        )
+        
+        if response.status_code == 200:
+            await update.message.reply_text("✅ Outline API доступен!")
+        else:
+            await update.message.reply_text(f"❌ Outline API ошибка: {response.status_code}")
+            
+    except Exception as e:
+        await update.message.reply_text(f"❌ Ошибка подключения к Outline: {e}")
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Главное меню"""
@@ -775,32 +837,11 @@ def main():
     try:
         application = Application.builder().token(BOT_TOKEN).build()
         
+        # Команды
         application.add_handler(CommandHandler("start", start))
         application.add_handler(CommandHandler("balance", handle_balance))
         application.add_handler(CommandHandler("check_payment", handle_check_payment))
         application.add_handler(CommandHandler("configs", handle_my_configs))
         application.add_handler(CommandHandler("support", handle_support))
         application.add_handler(CommandHandler("instructions", handle_instructions))
-        
-        application.add_handler(CallbackQueryHandler(handle_callback_query))
-        application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_all_messages))
-        
-        print("🟢 VPN Bot запущен!")
-        print(f"🔑 Outline Server: {SERVER_LOCATION}")
-        print("💰 Интеграция с ЮKassa")
-        print("✅ Автоматическая выдача ключей")
-        print("🚀 Готов к работе!")
-        
-        application.run_polling()
-        
-    except Exception as e:
-        print(f"🔴 Критическая ошибка: {e}")
-        import traceback
-        traceback.print_exc()
-        print("🔄 Перезапуск через 10 секунд...")
-        import time
-        time.sleep(10)
-        main()
-
-if __name__ == '__main__':
-    main()
+        application.add_handler(CommandHandler("debug", debug
