@@ -844,4 +844,28 @@ def main():
         application.add_handler(CommandHandler("configs", handle_my_configs))
         application.add_handler(CommandHandler("support", handle_support))
         application.add_handler(CommandHandler("instructions", handle_instructions))
-        application.add_handler(CommandHandler("debug", debug
+        application.add_handler(CommandHandler("debug", debug_yookassa))  # ← ЗДЕСЬ БЫЛА ОШИБКА
+        application.add_handler(CommandHandler("test_outline", test_outline))
+        
+        application.add_handler(CallbackQueryHandler(handle_callback_query))
+        application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_all_messages))
+        
+        print("🟢 VPN Bot запущен!")
+        print(f"🔑 Outline Server: {SERVER_LOCATION}")
+        print("💰 Интеграция с ЮKassa")
+        print("✅ Автоматическая выдача ключей")
+        print("🚀 Готов к работе!")
+        
+        application.run_polling()
+        
+    except Exception as e:
+        print(f"🔴 Критическая ошибка: {e}")
+        import traceback
+        traceback.print_exc()
+        print("🔄 Перезапуск через 10 секунд...")
+        import time
+        time.sleep(10)
+        main()
+
+if __name__ == '__main__':
+    main()
