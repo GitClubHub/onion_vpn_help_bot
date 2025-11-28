@@ -888,7 +888,7 @@ https://disk.yandex.ru/d/TcLDT462de165g
 💡 <b>После оплаты нажмите "✅ Проверить оплату" для получения ключа!</b>
 """
 
-        keyboard = [
+    keyboard = [
         [InlineKeyboardButton("💰 Пополнить баланс", callback_data="to_balance")],
         [InlineKeyboardButton("✅ Проверить оплату", callback_data="check_payment_global")]
     ]
