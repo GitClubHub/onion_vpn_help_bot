@@ -30,10 +30,10 @@ SERVER_LOCATION = "Германия"
 
 # Цены в рублях
 PRICES = {
-    "1_month": 149,
-    "3_months": 399,
-    "6_months": 699,
-    "12_months": 1199
+    "1_month": 100,
+    "3_months": 250,
+    "6_months": 450,
+    "12_months": 700
 }
 
 # Тарифные названия
@@ -596,7 +596,7 @@ async def test_payment_simple(update: Update, context: ContextTypes.DEFAULT_TYPE
     try:
         payment_data = {
             "amount": {
-                "value": "149.00",
+                "value": "100.00",
                 "currency": "RUB"
             },
             "confirmation": {
@@ -613,7 +613,7 @@ async def test_payment_simple(update: Update, context: ContextTypes.DEFAULT_TYPE
                         "description": "Outline VPN - 1 месяц",
                         "quantity": "1",
                         "amount": {
-                            "value": "149.00",
+                            "value": "100.00",
                             "currency": "RUB"
                         },
                         "vat_code": "1",
@@ -729,12 +729,12 @@ async def handle_balance(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     keyboard = [
         [
-            InlineKeyboardButton("1 месяц - 149₽", callback_data="tariff_1_month"),
-            InlineKeyboardButton("3 месяца - 399₽", callback_data="tariff_3_months")
+            InlineKeyboardButton("1 месяц - 100₽", callback_data="tariff_1_month"),
+            InlineKeyboardButton("3 месяца - 250₽", callback_data="tariff_3_months")
         ],
         [
-            InlineKeyboardButton("6 месяцев - 699₽", callback_data="tariff_6_months"),
-            InlineKeyboardButton("12 месяцев - 1199₽", callback_data="tariff_12_months")
+            InlineKeyboardButton("6 месяцев - 450₽", callback_data="tariff_6_months"),
+            InlineKeyboardButton("12 месяцев - 700₽", callback_data="tariff_12_months")
         ]
     ]
     reply_markup = InlineKeyboardMarkup(keyboard)
@@ -841,12 +841,12 @@ async def handle_balance_callback(update: Update, context: ContextTypes.DEFAULT_
     
     keyboard = [
         [
-            InlineKeyboardButton("1 месяц - 149₽", callback_data="tariff_1_month"),
-            InlineKeyboardButton("3 месяца - 399₽", callback_data="tariff_3_months")
+            InlineKeyboardButton("1 месяц - 100₽", callback_data="tariff_1_month"),
+            InlineKeyboardButton("3 месяца - 250₽", callback_data="tariff_3_months")
         ],
         [
-            InlineKeyboardButton("6 месяцев - 699₽", callback_data="tariff_6_months"),
-            InlineKeyboardButton("12 месяцев - 1199₽", callback_data="tariff_12_months")
+            InlineKeyboardButton("6 месяцев - 450₽", callback_data="tariff_6_months"),
+            InlineKeyboardButton("12 месяцев - 700₽", callback_data="tariff_12_months")
         ]
     ]
     reply_markup = InlineKeyboardMarkup(keyboard)
@@ -887,8 +887,8 @@ https://disk.yandex.ru/d/TcLDT462de165g
 
 💡 <b>После оплаты нажмите "✅ Проверить оплату" для получения ключа!</b>
 """
-    
-    keyboard = [
+
+        keyboard = [
         [InlineKeyboardButton("💰 Пополнить баланс", callback_data="to_balance")],
         [InlineKeyboardButton("✅ Проверить оплату", callback_data="check_payment_global")]
     ]
@@ -921,7 +921,7 @@ https://getoutline.org/
 
 💡 <b>После оплаты нажмите "✅ Проверить оплату"!</b>
 """
-    
+
     keyboard = [
         [InlineKeyboardButton("💰 Пополнить баланс", callback_data="to_balance")],
         [InlineKeyboardButton("✅ Проверить оплату", callback_data="check_payment_global")]
@@ -1034,6 +1034,7 @@ def main():
         print("✅ Автоматическая выдача ключей") 
         print("📋 Обязательные чеки по ФЗ-54")
         print("🔍 Подробное логирование")
+        print("💎 Новые цены: 100/250/450/700 руб")
         print("🚀 Готов к работе!")
         
         application.run_polling()
