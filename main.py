@@ -224,57 +224,8 @@ def calculate_expiry_date(tariff):
     else:
         return now + datetime.timedelta(days=30)
 
-async def create_vpn_config_after_payment(user_id: int, amount: int, tariff: str, update: Update = None):
-    """АВТОМАТИЧЕСКОЕ создание VPN конфигурации после оплаты"""
-    try:
-        print(f"🎯 Автоматически создаю VPN ключ для {user_id}, тариф: {tariff}")
-        
-        # 1. Пытаемся создать реальный ключ через Outline API
-        access_key, key_id = create_real_outline_key()
-        
-        # 2. Если не удалось - создаем демо-ключ
-        if not access_key:
-            print("⚠️ Outline API недоступен, создаю демо-ключ")
-            access_key = generate_demo_access_key()
-            key_id = f"demo_{user_id}_{int(datetime.datetime.now().timestamp())}"
-        
-        # 3. Сохраняем в базу данных
-        expiry_date = calculate_expiry_date(tariff)
-        
-        conn = sqlite3.connect('vpn.db', check_same_thread=False)
-        cursor = conn.cursor()
-        cursor.execute('''
-            INSERT INTO vpn_configs 
-            (user_id, config_name, access_key, outline_key_id, expiry_date, is_active)
-            VALUES (?, ?, ?, ?, ?, ?)
-        ''', (
-            user_id, 
-            f"outline_{tariff}_{user_id}",
-            access_key, 
-            key_id,
-            expiry_date,
-            True
-        ))
-        conn.commit()
-        conn.close()
-        
-        print(f"✅ Ключ сохранен в БД для пользователя {user_id}")
-        
-        # 4. Отправляем ключ пользователю
-        await send_vpn_key_to_user(user_id, access_key, amount, tariff, expiry_date, key_id, update)
-        
-    except Exception as e:
-        print(f"❌ Ошибка создания конфига: {e}")
-        if update and hasattr(update, 'message'):
-            await update.message.reply_text(
-                "❌ <b>Ошибка при создании VPN ключа</b>\n\n"
-                f"Пожалуйста, обратитесь в поддержку: {SUPPORT_USERNAME}\n"
-                "Мы решим проблему в течение 15 минут!",
-                parse_mode='HTML'
-            )
-
 async def send_vpn_key_to_user(user_id: int, access_key: str, amount: int, tariff: str, 
-                              expiry_date: datetime, key_id: str, update: Update = None):
+                              expiry_date: datetime, key_id: str, update: Update = None, context: ContextTypes.DEFAULT_TYPE = None):
     """Отправка ключа пользователю"""
     
     # Определяем тип ключа для сообщения
@@ -325,11 +276,100 @@ async def send_vpn_key_to_user(user_id: int, access_key: str, amount: int, tarif
                 await update.message.reply_text(success_text, parse_mode='HTML')
             elif hasattr(update, 'callback_query'):
                 await update.callback_query.message.reply_text(success_text, parse_mode='HTML')
+        elif context:
+            # Если нет update, но есть context - отправляем напрямую
+            await context.bot.send_message(
+                chat_id=user_id,
+                text=success_text,
+                parse_mode='HTML'
+            )
+        else:
+            # Создаем временный application для отправки
+            from telegram.ext import Application
+            app = Application.builder().token(BOT_TOKEN).build()
+            await app.initialize()
+            await app.bot.send_message(
+                chat_id=user_id,
+                text=success_text,
+                parse_mode='HTML'
+            )
+            await app.shutdown()
+            
+        print(f"✅ Ключ отправлен пользователю {user_id}")
+        
     except Exception as e:
-        print(f"❌ Ошибка отправки ключа пользователю: {e}")
+        print(f"❌ Ошибка отправки ключа пользователю {user_id}: {e}")
+        # Пытаемся отправить через создание нового приложения
+        try:
+            app = Application.builder().token(BOT_TOKEN).build()
+            await app.initialize()
+            await app.bot.send_message(
+                chat_id=user_id,
+                text=success_text,
+                parse_mode='HTML'
+            )
+            await app.shutdown()
+            print(f"✅ Ключ отправлен через резервный метод пользователю {user_id}")
+        except Exception as e2:
+            print(f"❌ КРИТИЧЕСКАЯ ошибка отправки ключа: {e2}")
 
-async def check_payment_status(payment_id: str, user_id: int, update: Update = None):
-    """Проверка статуса конкретного платежа - УПРОЩЕННАЯ ВЕРСИЯ"""
+async def create_vpn_config_after_payment(user_id: int, amount: int, tariff: str, update: Update = None, context: ContextTypes.DEFAULT_TYPE = None):
+    """АВТОМАТИЧЕСКОЕ создание VPN конфигурации после оплаты"""
+    try:
+        print(f"🎯 НАЧИНАЮ создание VPN ключа для {user_id}, тариф: {tariff}")
+        
+        # 1. Пытаемся создать реальный ключ через Outline API
+        print("🔄 Пытаюсь создать реальный ключ...")
+        access_key, key_id = create_real_outline_key()
+        
+        # 2. Если не удалось - создаем демо-ключ
+        if not access_key:
+            print("⚠️ Outline API недоступен, создаю демо-ключ")
+            access_key = generate_demo_access_key()
+            key_id = f"demo_{user_id}_{int(datetime.datetime.now().timestamp())}"
+        
+        print(f"✅ Ключ создан: {access_key[:50]}...")
+        
+        # 3. Сохраняем в базу данных
+        expiry_date = calculate_expiry_date(tariff)
+        
+        conn = sqlite3.connect('vpn.db', check_same_thread=False)
+        cursor = conn.cursor()
+        cursor.execute('''
+            INSERT INTO vpn_configs 
+            (user_id, config_name, access_key, outline_key_id, expiry_date, is_active)
+            VALUES (?, ?, ?, ?, ?, ?)
+        ''', (
+            user_id, 
+            f"outline_{tariff}_{user_id}",
+            access_key, 
+            key_id,
+            expiry_date,
+            True
+        ))
+        conn.commit()
+        conn.close()
+        
+        print(f"✅ Ключ сохранен в БД для пользователя {user_id}")
+        
+        # 4. Отправляем ключ пользователю
+        print("🔄 Отправляю ключ пользователю...")
+        await send_vpn_key_to_user(user_id, access_key, amount, tariff, expiry_date, key_id, update, context)
+        print("✅ Ключ отправлен!")
+        
+    except Exception as e:
+        print(f"❌ КРИТИЧЕСКАЯ Ошибка создания конфига: {e}")
+        traceback.print_exc()
+        if update and hasattr(update, 'message'):
+            await update.message.reply_text(
+                "❌ <b>КРИТИЧЕСКАЯ ошибка при создании VPN ключа</b>\n\n"
+                f"Пожалуйста, обратитесь в поддержку: {SUPPORT_USERNAME}\n"
+                "Мы решим проблему в течение 15 минут!",
+                parse_mode='HTML'
+            )
+
+async def check_payment_status(payment_id: str, user_id: int, update: Update = None, context: ContextTypes.DEFAULT_TYPE = None):
+    """Проверка статуса конкретного платежа"""
     try:
         print(f"🔍 Проверяю платеж {payment_id} для пользователя {user_id}")
         
@@ -349,7 +389,7 @@ async def check_payment_status(payment_id: str, user_id: int, update: Update = N
                 # Платеж успешен!
                 amount = int(float(payment_info['amount']['value']))
                 
-                # ВСЕГДА берем тариф из БД, так как в metadata его может не быть
+                # ВСЕГДА берем тариф из БД
                 conn = sqlite3.connect('vpn.db', check_same_thread=False)
                 cursor = conn.cursor()
                 cursor.execute('SELECT tariff, amount FROM payments WHERE yookassa_payment_id = ?', (payment_id,))
@@ -381,7 +421,7 @@ async def check_payment_status(payment_id: str, user_id: int, update: Update = N
                 print(f"✅ База данных обновлена для пользователя {user_id}")
                 
                 # Автоматически создаем VPN ключ
-                await create_vpn_config_after_payment(user_id, db_amount, tariff, update)
+                await create_vpn_config_after_payment(user_id, db_amount, tariff, update, context)
                 return True
                 
             elif payment_info['status'] == 'pending':
@@ -407,7 +447,7 @@ async def check_payment_status(payment_id: str, user_id: int, update: Update = N
         traceback.print_exc()
         return False
 
-async def check_all_user_payments(user_id: int, update: Update):
+async def check_all_user_payments(user_id: int, update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Проверка ВСЕХ платежей пользователя"""
     conn = sqlite3.connect('vpn.db', check_same_thread=False)
     cursor = conn.cursor()
@@ -444,7 +484,7 @@ async def check_all_user_payments(user_id: int, update: Update):
         payment_id, amount, tariff, status = payment
         print(f"🔍 Проверяю платеж: {payment_id}")
         
-        success = await check_payment_status(payment_id, user_id, update)
+        success = await check_payment_status(payment_id, user_id, update, context)
         if success:
             processed_payments += 1
     
@@ -514,7 +554,7 @@ async def force_check_payment(update: Update, context: ContextTypes.DEFAULT_TYPE
             found_payments = True
             break
         else:
-            success = await check_payment_status(payment_id, user_id, update)
+            success = await check_payment_status(payment_id, user_id, update, context)
             if success:
                 found_payments = True
                 break
@@ -556,6 +596,91 @@ async def show_payments(update: Update, context: ContextTypes.DEFAULT_TYPE):
         text += f"   📅 Дата: {date}\n\n"
     
     await update.message.reply_text(text, parse_mode='HTML')
+
+async def debug_payment(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Подробная диагностика платежа"""
+    user_id = update.message.from_user.id
+    
+    await update.message.reply_text("🔍 Запускаю подробную диагностику...")
+    
+    # 1. Проверяем платежи в БД
+    conn = sqlite3.connect('vpn.db', check_same_thread=False)
+    cursor = conn.cursor()
+    cursor.execute('''
+        SELECT yookassa_payment_id, amount, tariff, status, payment_date 
+        FROM payments 
+        WHERE user_id = ? 
+        ORDER BY payment_date DESC
+    ''', (user_id,))
+    
+    payments = cursor.fetchall()
+    conn.close()
+    
+    if not payments:
+        await update.message.reply_text("❌ В БД нет платежей")
+        return
+    
+    text = "📋 <b>Платежи в БД:</b>\n\n"
+    for i, (payment_id, amount, tariff, status, date) in enumerate(payments, 1):
+        text += f"{i}. <b>ID:</b> {payment_id}\n"
+        text += f"   💰 Сумма: {amount} руб\n"
+        text += f"   📋 Тариф: {tariff}\n"
+        text += f"   📊 Статус: {status}\n"
+        text += f"   📅 Дата: {date}\n\n"
+    
+    await update.message.reply_text(text, parse_mode='HTML')
+    
+    # 2. Проверяем статус у ЮKassa для каждого платежа
+    for payment_id, amount, tariff, status, date in payments:
+        if status == 'pending':
+            await update.message.reply_text(f"🔄 Проверяю платеж {payment_id}...")
+            
+            try:
+                response = requests.get(
+                    f"{YOOKASSA_API_URL}/{payment_id}",
+                    auth=(YOOKASSA_SHOP_ID, YOOKASSA_SECRET_KEY),
+                    timeout=30
+                )
+                
+                if response.status_code == 200:
+                    payment_info = response.json()
+                    current_status = payment_info['status']
+                    
+                    await update.message.reply_text(
+                        f"📊 <b>Статус от ЮKassa:</b> {current_status}\n"
+                        f"💰 <b>Сумма:</b> {payment_info['amount']['value']} {payment_info['amount']['currency']}\n"
+                        f"📝 <b>Описание:</b> {payment_info.get('description', 'Нет')}",
+                        parse_mode='HTML'
+                    )
+                    
+                    if current_status == 'succeeded':
+                        await update.message.reply_text("✅ Платеж УСПЕШЕН! Создаю ключ...")
+                        # Принудительно обновляем статус и создаем ключ
+                        await check_payment_status(payment_id, user_id, update, context)
+                    elif current_status == 'pending':
+                        await update.message.reply_text("⏳ Платеж еще обрабатывается...")
+                    else:
+                        await update.message.reply_text(f"❌ Статус: {current_status}")
+                        
+                else:
+                    await update.message.reply_text(f"❌ Ошибка запроса: {response.status_code}")
+                    
+            except Exception as e:
+                await update.message.reply_text(f"❌ Ошибка: {e}")
+        
+        elif status == 'succeeded':
+            # Проверяем есть ли ключ
+            conn = sqlite3.connect('vpn.db', check_same_thread=False)
+            cursor = conn.cursor()
+            cursor.execute('SELECT access_key FROM vpn_configs WHERE user_id = ?', (user_id,))
+            configs = cursor.fetchall()
+            conn.close()
+            
+            if configs:
+                await update.message.reply_text("✅ Ключ уже создан! Проверьте '🔧 Мои конфиги'")
+            else:
+                await update.message.reply_text("❌ Платеж успешен, но ключ не создан. Создаю...")
+                await create_vpn_config_after_payment(user_id, amount, tariff, update, context)
 
 async def debug_yookassa(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Диагностика подключения к ЮKassa"""
@@ -784,7 +909,7 @@ async def handle_check_payment(update: Update, context: ContextTypes.DEFAULT_TYP
         parse_mode='HTML'
     )
     
-    await check_all_user_payments(user_id, update)
+    await check_all_user_payments(user_id, update, context)
 
 async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Обработка инлайн-кнопок"""
@@ -836,7 +961,7 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
     
     elif data == 'check_payment_global':
         await query.edit_message_text("🔄 Проверяю платежи...")
-        await check_all_user_payments(user_id, update)
+        await check_all_user_payments(user_id, update, context)
     
     elif data == 'back_to_balance':
         await handle_balance_callback(update, context)
@@ -1056,6 +1181,7 @@ def main():
         application.add_handler(CommandHandler("test_pay", test_payment_simple))
         application.add_handler(CommandHandler("force_check", force_check_payment))
         application.add_handler(CommandHandler("payments", show_payments))
+        application.add_handler(CommandHandler("debug_pay", debug_payment))
         
         application.add_handler(CallbackQueryHandler(handle_callback_query))
         application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_all_messages))
