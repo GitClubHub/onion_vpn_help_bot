@@ -329,7 +329,7 @@ async def send_vpn_key_to_user(user_id: int, access_key: str, amount: int, tarif
         print(f"❌ Ошибка отправки ключа пользователю: {e}")
 
 async def check_payment_status(payment_id: str, user_id: int, update: Update = None):
-    """Проверка статуса конкретного платежа - ИСПРАВЛЕННАЯ ВЕРСИЯ"""
+    """Проверка статуса конкретного платежа - УПРОЩЕННАЯ ВЕРСИЯ"""
     try:
         print(f"🔍 Проверяю платеж {payment_id} для пользователя {user_id}")
         
@@ -349,30 +349,31 @@ async def check_payment_status(payment_id: str, user_id: int, update: Update = N
                 # Платеж успешен!
                 amount = int(float(payment_info['amount']['value']))
                 
-                # Получаем тариф из metadata или из БД
-                if 'metadata' in payment_info and 'tariff' in payment_info['metadata']:
-                    tariff = payment_info['metadata']['tariff']
+                # ВСЕГДА берем тариф из БД, так как в metadata его может не быть
+                conn = sqlite3.connect('vpn.db', check_same_thread=False)
+                cursor = conn.cursor()
+                cursor.execute('SELECT tariff, amount FROM payments WHERE yookassa_payment_id = ?', (payment_id,))
+                result = cursor.fetchone()
+                
+                if result:
+                    tariff = result[0]
+                    db_amount = result[1]
+                    print(f"✅ Найден платеж в БД: тариф={tariff}, сумма={db_amount}")
                 else:
-                    # Если нет в metadata, берем из БД
-                    conn = sqlite3.connect('vpn.db', check_same_thread=False)
-                    cursor = conn.cursor()
-                    cursor.execute('SELECT tariff FROM payments WHERE yookassa_payment_id = ?', (payment_id,))
-                    result = cursor.fetchone()
-                    tariff = result[0] if result else "1_month"
-                    conn.close()
+                    print("❌ Платеж не найден в БД, использую тариф по умолчанию")
+                    tariff = "1_month"
+                    db_amount = amount
                 
                 print(f"✅ Платеж подтвержден! Сумма: {amount}, Тариф: {tariff}")
                 
                 # Обновляем статус в БД
-                conn = sqlite3.connect('vpn.db', check_same_thread=False)
-                cursor = conn.cursor()
                 cursor.execute(
                     'UPDATE payments SET status = "succeeded" WHERE yookassa_payment_id = ?', 
                     (payment_id,)
                 )
                 cursor.execute(
                     'UPDATE users SET balance = balance + ? WHERE user_id = ?', 
-                    (amount, user_id)
+                    (db_amount, user_id)
                 )
                 conn.commit()
                 conn.close()
@@ -380,7 +381,7 @@ async def check_payment_status(payment_id: str, user_id: int, update: Update = N
                 print(f"✅ База данных обновлена для пользователя {user_id}")
                 
                 # Автоматически создаем VPN ключ
-                await create_vpn_config_after_payment(user_id, amount, tariff, update)
+                await create_vpn_config_after_payment(user_id, db_amount, tariff, update)
                 return True
                 
             elif payment_info['status'] == 'pending':
@@ -525,6 +526,36 @@ async def force_check_payment(update: Update, context: ContextTypes.DEFAULT_TYPE
             f"Или напишите в поддержку: {SUPPORT_USERNAME}",
             parse_mode='HTML'
         )
+
+async def show_payments(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Показать все платежи пользователя"""
+    user_id = update.message.from_user.id
+    
+    conn = sqlite3.connect('vpn.db', check_same_thread=False)
+    cursor = conn.cursor()
+    cursor.execute('''
+        SELECT yookassa_payment_id, amount, tariff, status, payment_date 
+        FROM payments 
+        WHERE user_id = ? 
+        ORDER BY payment_date DESC
+    ''', (user_id,))
+    
+    payments = cursor.fetchall()
+    conn.close()
+    
+    if not payments:
+        await update.message.reply_text("❌ У вас нет платежей")
+        return
+    
+    text = "📋 <b>Ваши платежи:</b>\n\n"
+    for i, (payment_id, amount, tariff, status, date) in enumerate(payments, 1):
+        text += f"{i}. <b>ID:</b> {payment_id}\n"
+        text += f"   💰 Сумма: {amount} руб\n"
+        text += f"   📋 Тариф: {tariff}\n"
+        text += f"   📊 Статус: {status}\n"
+        text += f"   📅 Дата: {date}\n\n"
+    
+    await update.message.reply_text(text, parse_mode='HTML')
 
 async def debug_yookassa(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Диагностика подключения к ЮKassa"""
@@ -1024,6 +1055,7 @@ def main():
         application.add_handler(CommandHandler("test_outline", test_outline))
         application.add_handler(CommandHandler("test_pay", test_payment_simple))
         application.add_handler(CommandHandler("force_check", force_check_payment))
+        application.add_handler(CommandHandler("payments", show_payments))
         
         application.add_handler(CallbackQueryHandler(handle_callback_query))
         application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_all_messages))
@@ -1035,6 +1067,7 @@ def main():
         print("📋 Обязательные чеки по ФЗ-54")
         print("🔍 Подробное логирование")
         print("💎 Новые цены: 100/250/450/700 руб")
+        print("🛠 Улучшенная проверка платежей")
         print("🚀 Готов к работе!")
         
         application.run_polling()
